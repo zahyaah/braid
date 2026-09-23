@@ -1,0 +1,19 @@
+# Generated corpora, indexes, and models are not committed. The labeled query
+# set is evidence rather than output, so it lives in braid/eval/queryset/ and is
+# committed with the code.
+data/*
+!data/.gitkeep
+# The manifest is committed: it carries the seed, the counts, and the frozen
+# corpus_hash that Checkpoint B audits. The corpus itself is regenerable from
+# it, so the corpus stays out.
+!data/manifest.json
+models/
+reports/*.png
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.DS_Store

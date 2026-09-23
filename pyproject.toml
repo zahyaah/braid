@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "braid"
+version = "0.1.0"
+description = "Hybrid retrieval engine fusing BM25, dense vectors, and entity-graph traversal"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+
+# Base install covers ingest, queryset, and eval: the modules that must exist
+# before any retrieval code (Checkpoint B). The heavy model and service clients
+# are extras, because on 8 GiB the phases that need them do not run together.
+dependencies = [
+    "datasets>=2.19,<4",
+    "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+extract = [
+    "spacy>=3.7,<3.9",
+]
+index = [
+    "opensearch-py>=2.6,<3",
+    "faiss-cpu>=1.8,<2",
+    "neo4j>=5.20,<6",
+    "sentence-transformers>=3.0,<5",
+]
+rerank = [
+    "sentence-transformers>=3.0,<5",
+]
+dev = [
+    "pytest>=8.2,<9",
+    "ruff>=0.5,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["braid"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires OpenSearch or Neo4j containers; skipped when unavailable",
+    "slow: downloads a dataset or loads a model",
+]

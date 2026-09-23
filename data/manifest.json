@@ -1,0 +1,42 @@
+{
+  "config": "distractor",
+  "corpus_hash": "359f572b07eab0f3751e6e46acb10a6a6b591b90105742ed168e76c1003bf258",
+  "created_at": "2026-09-23T00:48:23+00:00",
+  "dataset": "hotpotqa/hotpot_qa",
+  "datasets_version": "3.6.0",
+  "dedupe": {
+    "exact_removed": 0,
+    "near_removed": 1,
+    "passages_in": 1001,
+    "passages_out": 1000,
+    "removals": [
+      {
+        "jaccard": 0.958,
+        "kept_id": "31f56266c6e23859",
+        "kept_title": "List of Arsenal F.C. seasons",
+        "kind": "near",
+        "removed_id": "f85809713efbd6ad",
+        "removed_title": "List of Arsenal F.C. managers"
+      }
+    ]
+  },
+  "frozen": false,
+  "frozen_at": null,
+  "git_commit": "992abb965a351ed462c74ea3b7ee84499dd0c8f8",
+  "hash_history": [],
+  "manifest_version": 1,
+  "passages_after_dedupe": 1000,
+  "passages_before_dedupe": 1001,
+  "questions_out": 102,
+  "questions_sampled": 102,
+  "remap": {
+    "questions_dropped_collapsed": 0,
+    "questions_dropped_missing": 0,
+    "questions_in": 102,
+    "questions_out": 102,
+    "questions_remapped": 0
+  },
+  "seed": 20260923,
+  "split": "validation",
+  "target_passages": 1000
+}
