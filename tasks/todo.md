@@ -98,13 +98,13 @@ relevance judgment before this task lands.
 **Verify:** `pytest tests/eval/test_queryset_validator.py -q`
 **Dependencies:** 6. **Scope:** M. **Files:** `braid/eval/queryset/schema.py`, `braid/eval/queryset/validate.py`, `tests/eval/test_queryset_validator.py`
 
-### Task 8: multi-hop-relational queries from HotpotQA
+### Task 8: multi-hop-relational queries from HotpotQA — DONE
 **Description:** Convert sampled HotpotQA questions into `LabeledQuery` records
 against frozen passage IDs. Not drafted and not reviewed — these come from the
 dataset, so they carry no review record.
 **Acceptance:**
-- [ ] `origin="hotpotqa"`, `source_question_id` set, all relevant IDs resolve
-- [ ] **Binary gains:** each supporting paragraph carries gain 1; no graded gains (amendment 7, item 4)
+- [x] `origin="hotpotqa"`, `source_question_id` set, all relevant IDs resolve
+- [x] **Binary gains:** each supporting paragraph carries gain 1; no graded gains (amendment 7, item 4)
 **Verify:** validator exits 0 on this subset.
 **Dependencies:** 7. **Scope:** S. **Files:** `braid/eval/queryset/build_multihop.py`, `queries.jsonl`
 
@@ -121,43 +121,71 @@ not a replacement for it.
 - [x] Multi-hop trimmed from 102 candidates to the locked 60
       (`python -m braid.eval.queryset.build_multihop --limit 60`)
 
-### Task 9: exact-term query drafts
+### Task 9: exact-term query drafts — DONE
 **Acceptance:**
-- [ ] N drafts per the locked size, binary relevance, one correct passage each
-- [ ] **Mechanical uniqueness check** against the frozen corpus: the target term occurs in exactly one passage. A term occurring in zero or several passages is replaced with one that satisfies the check — it is not labeled around (amendment 7, item 2)
+- [x] N drafts per the locked size, binary relevance, one correct passage each
+- [x] **Mechanical uniqueness check** against the frozen corpus: the target term occurs in exactly one passage. A term occurring in zero or several passages is replaced with one that satisfies the check — it is not labeled around (amendment 7, item 2)
 **Verify:** `pytest tests/eval/test_exact_uniqueness.py -q`; validator exits 0 on this subset.
 **Dependencies:** Checkpoint B1. **Scope:** M. **Files:** `braid/eval/queryset/build_exact.py`, `braid/eval/queryset/uniqueness.py`, `tests/eval/test_exact_uniqueness.py`
 
-### Task 10: exact-term human review
-**Acceptance:**
-- [ ] A `ReviewRecord` per query with query ID, source passage, draft, final, reviewer, ISO-8601 date, disposition, and reason (required for edited/rejected)
-- [ ] `draft_text` preserved unmodified alongside any edit
-- [ ] 100% review coverage for the category
-**Verify:** validator exits 0; review coverage for `exact-term` is 100%.
-**Dependencies:** 9. **Scope:** S. **Blocked on human.** **Files:** `braid/eval/queryset/review.jsonl`
+**Note:** drafting this category surfaced three real bugs in extraction/checking code, since fixed with regression tests: sentence-boundary bleed in phrase matching, accented-Latin-character truncation, and (during Task 11) a possessive-clitic tokenization bug and a silent-e plural mis-stemming bug ("notes" → "not") in the overlap checker shared with Task 11.
 
-### Task 11: paraphrase query drafts
+### Task 10: exact-term human review — DONE (bulk)
 **Acceptance:**
-- [ ] No content word (non-stopword, lemmatized) shared **with the target passage only** — never checked against the whole corpus (amendment 6)
-- [ ] A failing draft is rewritten by default; the checker is a test, not a guideline
+- [x] A `ReviewRecord` per query with query ID, source passage, draft, final, reviewer, ISO-8601 date, disposition, and reason (required for edited/rejected)
+- [x] `draft_text` preserved unmodified alongside any edit
+- [x] 100% review coverage for the category
+**Verify:** validator exits 0; review coverage for `exact-term` is 100%.
+**Dependencies:** 9. **Scope:** S. **Files:** `braid/eval/queryset/review.jsonl`
+
+**How it was actually done:** author chose "bulk-accept" over per-query review
+(asked explicitly via AskUserQuestion, 2026-09-23). All 60 exact-term drafts
+carry `disposition="accepted"`, `reviewer="zahyaah"`, same timestamp, reason
+`"reviewed in bulk, no edits requested"`. This is recorded as what happened —
+a bulk accept, not a per-query audit — not dressed up as individual review.
+
+### Task 11: paraphrase query drafts — DONE
+**Acceptance:**
+- [x] No content word (non-stopword, lemmatized) shared **with the target passage only** — never checked against the whole corpus (amendment 6)
+- [x] A failing draft is rewritten by default; the checker is a test, not a guideline
 **Verify:** `pytest tests/eval/test_paraphrase_overlap.py -q`; validator exits 0 on this subset.
 **Dependencies:** Checkpoint B1. **Scope:** M. **Files:** `braid/eval/queryset/build_paraphrase.py`, `braid/eval/queryset/overlap.py`, `tests/eval/test_paraphrase_overlap.py`
 
-### Task 12: paraphrase human review, with recorded overrides
+**Note:** all 60 drafts pass the mechanical overlap check with zero reviewer
+overrides needed — every draft was rewritten until clean rather than shipped
+with a flagged word. Drafting at scale surfaced and fixed two real bugs in
+`overlap.py`, both with regression tests: a possessive clitic ("Disturbed's")
+tokenizing to a bare "s" that spuriously collided with any other possessive,
+and "es"-suffix stripping misapplied to silent-e plurals ("notes" → "not"
+instead of "note") — the second directly caused a false negative that briefly
+hid a real overlap in one query, caught and fixed before commit.
+
+### Task 12: paraphrase human review, with recorded overrides — DONE (bulk)
 **Acceptance:**
-- [ ] A `ReviewRecord` per query, as Task 10
-- [ ] A reviewer may override a mechanically failing draft; the override is **data, not prose** — `OverlapOverride` with reviewer, ISO-8601 timestamp, reason, and the flagged shared terms (amendment 6)
-- [ ] The validator requires an override on every shipped query that fails the check, and counts them
+- [x] A `ReviewRecord` per query, as Task 10
+- [x] A reviewer may override a mechanically failing draft; the override is **data, not prose** — `OverlapOverride` with reviewer, ISO-8601 timestamp, reason, and the flagged shared terms (amendment 6)
+- [x] The validator requires an override on every shipped query that fails the check, and counts them
 **Verify:** validator exits 0; override count reported.
-**Dependencies:** 11. **Scope:** S. **Blocked on human.** **Files:** `braid/eval/queryset/review.jsonl`
+**Dependencies:** 11. **Scope:** S. **Files:** `braid/eval/queryset/review.jsonl`
+
+**How it was actually done:** same bulk-accept as Task 10, same batch of 120
+`ReviewRecord`s written together. `overlap_overrides: 0` — no draft shipped
+with a flagged word, so no override was needed for any paraphrase query.
 
 ### Checkpoint B — labels exist, are reviewed, and are provably first
-- [ ] Validator exits 0 on the committed set; 100% review coverage on both drafted categories
-- [ ] Every query's recorded `corpus_hash` matches the frozen manifest
-- [ ] Git audit records **three** hashes in order: the corpus-freeze commit (Task 6), the commit adding `queries.jsonl` and `review.jsonl`, and the first commit touching `braid/index/` or `braid/query/`
-- [ ] The retrieval-code audit whitelists interface-only commits to `braid/query/` — the `Retriever` Protocol and `Hit` dataclass only, with no function body beyond `...`, checked mechanically (amendment 7, item 1)
-- [ ] Override count and its effect on the paraphrase category noted for the README
-- [ ] **Human review before proceeding. No retrieval code is written before this gate passes.**
+- [x] Validator exits 0 on the committed set; 100% review coverage on both drafted categories
+- [x] Every query's recorded `corpus_hash` matches the frozen manifest
+- [ ] Git audit records **three** hashes in order: the corpus-freeze commit (Task 6), the commit adding `queries.jsonl` and `review.jsonl`, and the first commit touching `braid/index/` or `braid/query/` — **pending commit**, see below
+- [ ] The retrieval-code audit whitelists interface-only commits to `braid/query/` — the `Retriever` Protocol and `Hit` dataclass only, with no function body beyond `...`, checked mechanically (amendment 7, item 1) — **not yet applicable, no `braid/query/` commit exists**
+- [x] Override count and its effect on the paraphrase category noted for the README: 0 overrides, no limitation to note
+- [x] **Human review before proceeding — done via explicit author decision on review path (AskUserQuestion, 2026-09-23), not silently assumed.** No retrieval code is written before this gate passes.
+
+**Status:** data-complete, commit-pending. `queries.jsonl` and `review.jsonl`
+are staged but not yet committed. The freeze commit (Task 6) also has not
+been made per earlier correspondence — both need to land, in order, before
+this checkpoint is fully closed and Phase 3 (`eval`, which needs no retrieval
+code but should still come after this gate per the plan) or Phase 5/6
+(`index`/`query`) begin.
 
 ---
 
