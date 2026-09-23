@@ -9,6 +9,10 @@ data/*
 !data/manifest.json
 models/
 reports/*.png
+# Stub-run output is placeholder data proving the harness runs end to end,
+# not evidence. reports/*.md otherwise stays tracked -- extraction-quality.md,
+# finetune.md, comparison.md (the real run), graph-vs-vector.md are evidence.
+reports/stub-*.md
 
 .venv/
 __pycache__/
