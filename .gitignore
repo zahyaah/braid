@@ -7,6 +7,15 @@ data/*
 # corpus_hash that Checkpoint B audits. The corpus itself is regenerable from
 # it, so the corpus stays out.
 !data/manifest.json
+# The extraction-quality sample and its hand annotations are evidence, the
+# same reasoning as the query set: Task 21's own Verify step requires the
+# report's numbers to "regenerate from the committed annotations", which is
+# impossible if these are gitignored. triples.jsonl itself stays out -- it is
+# large (thousands of lines) and deterministically regenerable from the
+# corpus and code, unlike the hand annotations.
+!data/extract-sample.jsonl
+!data/extract-gold.jsonl
+!data/extract-manifest.json
 models/
 reports/*.png
 # Stub-run output is placeholder data proving the harness runs end to end,

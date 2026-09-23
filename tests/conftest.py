@@ -73,3 +73,13 @@ def fake_dataset() -> FakeDataset:
             )
         )
     return FakeDataset(rows)
+
+
+@pytest.fixture(scope="session")
+def nlp():
+    """en_core_web_sm: same dependency label scheme as en_core_web_trf
+    (confirmed empirically), much faster to load for the test suite.
+    """
+    import spacy
+
+    return spacy.load("en_core_web_sm")

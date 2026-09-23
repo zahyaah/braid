@@ -1,0 +1,65 @@
+# OpenSearch and Neo4j, single node, local only. Heap caps per SPEC.md
+# Hardware (8 GiB total, shared with a torch/spaCy process that is never
+# running at the same time as these containers -- SPEC.md Hardware).
+#
+# Config sources (workflow step 5 -- every setting below is cited, not
+# guessed):
+# - OpenSearch: discovery.type=single-node and OPENSEARCH_JAVA_OPTS for heap
+#   sizing -- https://docs.opensearch.org/latest/install-and-configure/install-opensearch/docker/
+#   DISABLE_SECURITY_PLUGIN=true to disable the security plugin (demo TLS
+#   certs and users) for local-only use --
+#   https://docs.opensearch.org/latest/security/configuration/disable-enable-security/
+#   Pinned to 2.19.6 (not the floating "2" tag, and not 3.x): 3.0+ is
+#   reported to no longer honor DISABLE_SECURITY_PLUGIN reliably --
+#   https://github.com/opensearch-project/security/issues/4062
+# - Neo4j: NEO4J_AUTH, NEO4J_server_memory_heap_max__size (the double
+#   underscore is the config-key-to-env-var escaping for a literal
+#   underscore in `server.memory.heap.max_size`), and
+#   NEO4J_server_memory_pagecache_size --
+#   https://neo4j.com/docs/operations-manual/current/docker/configuration/
+#   Pinned to 5.26.31-community (SPEC.md: "Neo4j 5.x Community").
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.19.6
+    container_name: braid-opensearch
+    environment:
+      - discovery.type=single-node
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - DISABLE_SECURITY_PLUGIN=true
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5.26.31-community
+    container_name: braid-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/braid-local-only
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=256m
+    ports:
+      - "7474:7474"  # HTTP browser/API
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  opensearch-data:
+  neo4j-data:

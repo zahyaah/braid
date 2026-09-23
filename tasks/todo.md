@@ -265,41 +265,99 @@ runs end to end. Not yet committed — staged, awaiting the commit command.
 
 ## Phase 4: `extract`
 
-### Task 18: spaCy pipeline and NER
+### Task 18: spaCy pipeline and NER — DONE
 **Acceptance:**
-- [ ] Entities emitted with type and char spans into passage text
-- [ ] Runs as a batch with peak RSS recorded (8 GiB constraint), no containers running
+- [x] Entities emitted with type and char spans into passage text
+- [x] Runs as a batch with peak RSS recorded (8 GiB constraint), no containers running
 **Verify:** `pytest tests/extract/test_ner.py -q`
 **Dependencies:** 6. **Scope:** S. **Files:** `braid/extract/ner.py`, `tests/extract/test_ner.py`
 
-### Task 19: SVO dependency patterns
+**Note:** model is `en_core_web_trf` (SPEC-extract.md); confirmed empirically
+identical dependency-label scheme to `en_core_web_sm`, which the fast unit
+tests use instead (session-scoped `nlp` fixture in `tests/conftest.py`), with
+`en_core_web_trf` exercised in `@pytest.mark.slow` tests only. Peak RSS on the
+full 1000-passage corpus: 1.3-1.6 GB, well under the 8 GiB constraint.
+
+### Task 19: SVO dependency patterns — DONE
 **Acceptance:**
-- [ ] One fixture sentence per documented pattern (active SVO, passive, copular, verb-attached prepositional object, conjunction expansion), expected triple asserted
-- [ ] Negative fixtures yield no triple: fragments, questions, list headers
-- [ ] The pattern list is enumerated in the module README; changing it is a spec change
+- [x] One fixture sentence per documented pattern (active SVO, passive, copular, verb-attached prepositional object, conjunction expansion), expected triple asserted
+- [x] Negative fixtures yield no triple: fragments, questions, list headers
+- [x] The pattern list is enumerated in the module README; changing it is a spec change
 **Verify:** `pytest tests/extract/test_patterns.py -q`
 **Dependencies:** 18. **Scope:** M. **Files:** `braid/extract/patterns.py`, `braid/extract/README.md`, `tests/extract/test_patterns.py`
 
-### Task 20: Entity normalization
+**Bugs found and fixed while building this task** (all with regression
+tests): (1) `left_edge`/`right_edge` pulled an entire conjunction into the
+first conjunct's span, fixed with a custom subtree walk (`_span_bounds`) that
+excludes `cc`/`conj` edges; (2) interrogative sentences parse with the
+identical `nsubj`/`dobj` shape as declaratives, fixed by skipping sentences
+ending in `?`. Two further bugs (relative-pronoun subjects, relation casing)
+were found later via the Task 21 quality report and are recorded there.
+
+### Task 20: Entity normalization — DONE
 **Acceptance:**
-- [ ] Alias resolution against passage titles, case folding, within-passage first-mention pronoun substitution — each rule documented and tested
-- [ ] Cross-passage coreference explicitly not attempted, asserted by test
+- [x] Alias resolution against passage titles, case folding, within-passage first-mention pronoun substitution — each rule documented and tested
+- [x] Cross-passage coreference explicitly not attempted, asserted by test
 **Verify:** `pytest tests/extract/test_normalize_entities.py -q`
 **Dependencies:** 19. **Scope:** S. **Files:** `braid/extract/entities.py`, `tests/extract/test_normalize_entities.py`
 
-### Task 21: Extraction quality report
+**Note:** `_find_type`'s entity-type attachment was changed from exact-match
+to containment-match after the first full corpus run showed 78%/90% of
+subjects/objects with no type at all — a pattern's span routinely carries
+words around the named entity ("director Mike Nichols"). After the fix:
+55%/40% null. Regression tests added.
+
+### Task 21: Extraction quality report — DONE
 **Acceptance:**
-- [ ] 100 randomly sampled sentences annotated **before** the pipeline's output for those sentences is consulted, with the ordering recorded — otherwise recall is unmeasurable
-- [ ] Precision, recall, and 95% Wilson intervals in `reports/extraction-quality.md`
-- [ ] Triple count and per-relation histogram included, so sparsity is a number
+- [x] 100 randomly sampled sentences annotated **before** the pipeline's output for those sentences is consulted, with the ordering recorded — otherwise recall is unmeasurable
+- [x] Precision, recall, and 95% Wilson intervals in `reports/extraction-quality.md`
+- [x] Triple count and per-relation histogram included, so sparsity is a number
 **Verify:** report exists and its numbers regenerate from the committed annotations.
 **Dependencies:** 20. **Scope:** M. **Files:** `braid/extract/quality.py`, `reports/extraction-quality.md`, `data/extract-sample.jsonl`
 
-### Checkpoint D — extraction is measured, not assumed
-- [ ] Precision and recall reported with Wilson intervals
-- [ ] Triple histogram reviewed **specifically against the criterion-3 risk**; if yield is too low, decide now between documented pattern expansion and a reported negative finding
-- [ ] Entity-name distribution checked against D5's exact-match linking rule and hub cap, since both assumptions meet reality here first
-- [ ] **Human review before proceeding**
+**Results:** precision 0.577 [0.489, 0.661], recall 0.899 [0.813, 0.948], on
+79 gold triples across 72 of the 100 sampled sentences (79 pairs of the 100
+sentences fell outside the fixed pattern set's scope — copula verbs other
+than "be", clausal complements, adjectival predicates — and correctly
+received zero gold triples). Full run: 4,954 triples over 1,000 passages,
+`be` dominating the relation histogram (1,918) as expected for encyclopedic
+definitional prose.
+
+**Two real bugs found via inspecting real output before finalizing the
+report, both fixed with regression tests in `test_patterns.py`:** relative
+pronoun subjects ("which"/"who"/"that", POS WDT/WP) produced nonsensical
+triples like `(which, air on, ABC)` since only third-person personal
+pronouns are substituted — fixed by skipping WH-tagged subjects entirely;
+and a fronted preposition leaked surface-case into the relation string
+(`"become With"`) — fixed by lowercasing. **Known, not-fixed gaps** (out of
+the documented pattern set's scope, all stated in the report and in
+README.md): conjoined verb phrases are not expanded (pattern 5 only covers
+conjoined subjects/objects); parallel/positional conjunctions ("X, Y, Z
+replaced by A, B, C respectively") produce a cartesian product instead of
+paired triples.
+
+**Precision is a stated conservative lower bound**, not a point estimate to
+take at face value: spot-checking the unmatched extracted triples after the
+real run showed a substantial share are additional correct facts the
+conservative, one-representative-per-sentence gold annotation policy simply
+never recorded, not extraction errors. This is documented explicitly in the
+report rather than left for a reader to discover.
+
+### Checkpoint D — extraction is measured, not assumed — DONE
+- [x] Precision and recall reported with Wilson intervals
+- [x] Triple histogram reviewed **specifically against the criterion-3 risk**: 4,954 triples over 1,000 passages is a healthy yield; the graph will not be starved of candidate edges. No pattern expansion needed at this stage.
+- [ ] Entity-name distribution checked against D5's exact-match linking rule and hub cap — **deferred to Task 25** (Neo4j graph loader), where the real degree distribution first exists to check against
+- [x] **Human review before proceeding** — via standing authorization on review-path decisions
+
+**Status:** 201/201 tests pass (199 fast + 2 slow, `en_core_web_trf`), lint
+clean. Not yet committed — staged, awaiting the commit command. Real data
+files generated and part of this checkpoint's evidence, not committed to git
+per `.gitignore` (`data/*` except the manifest and queryset): `data/triples.jsonl`
+(4,954 triples), `data/extract-manifest.json`, `data/extract-sample.jsonl`,
+`data/extract-gold.jsonl` — the last is the hand-annotation evidence and
+arguably *should* be committed alongside `reports/extraction-quality.md`
+(similar reasoning to why the query set is committed as evidence); flagging
+this for the commit decision rather than deciding it silently.
 
 ---
 
