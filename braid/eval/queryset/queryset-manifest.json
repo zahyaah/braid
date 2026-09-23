@@ -1,6 +1,7 @@
 {
   "corpus_hash": "359f572b07eab0f3751e6e46acb10a6a6b591b90105742ed168e76c1003bf258",
   "counts": {
+    "exact-term": 60,
     "multi-hop-relational": 60
   },
   "created_at": "2026-09-23T00:55:16+00:00",
