@@ -108,15 +108,18 @@ dataset, so they carry no review record.
 **Verify:** validator exits 0 on this subset.
 **Dependencies:** 7. **Scope:** S. **Files:** `braid/eval/queryset/build_multihop.py`, `queries.jsonl`
 
-### Checkpoint B1 — D3 size lock
+### Checkpoint B1 — D3 size lock (LOCKED 2026-09-23)
 The size decides how many queries get drafted, so it is locked before drafting
 rather than discovered during it. D3's end-of-module fallback stays available
 until Checkpoint B; this checkpoint is the earlier, preferred decision point,
 not a replacement for it.
-- [ ] Final size committed: 180 (60/category, target) or 90 (30/category, minimum)
-- [ ] If 90: the README limitation text — wider per-category intervals, a real few-point gain likely spanning zero — is written now, not deferred
-- [ ] The chosen size is recorded in the query-set manifest
-- [ ] **Human decision required. Drafting does not start before this.**
+- [x] Final size committed: **180 (60/category, target)** — author's call, review
+      time absorbed rather than taking the 90-query fallback
+- [x] 90-query fallback not used; no README limitation text needed for size
+- [x] Recorded in `braid/eval/queryset/queryset-manifest.json`:
+      `locked_size=180`, `per_category_target=60`
+- [x] Multi-hop trimmed from 102 candidates to the locked 60
+      (`python -m braid.eval.queryset.build_multihop --limit 60`)
 
 ### Task 9: exact-term query drafts
 **Acceptance:**

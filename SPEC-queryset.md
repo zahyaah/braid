@@ -28,14 +28,28 @@ number in the project is unsound.
 - **paraphrase:** agent-drafted queries describing a passage's content without
   reusing its vocabulary, one per sampled passage. Binary relevance. A drafting
   constraint is enforced mechanically: no content word (non-stopword, after
-  lemmatization) may be shared **with the target passage's text only** — the
-  check is scoped to that one passage, never to the whole corpus, since a
-  corpus-wide ban would make most natural English unwritable.
+  conservative suffix folding) may be shared **with the target passage's text
+  only** — the check is scoped to that one passage, never to the whole corpus,
+  since a corpus-wide ban would make most natural English unwritable.
   A failing draft is rewritten by default. **A reviewer may override a
   mechanically failing draft**, for instance where the only accurate word for a
   concept is the passage's own. The override is data, not prose: it is recorded
   in `review.jsonl` with reviewer, timestamp, and reason, and the validator
   counts overrides and requires each failing query to carry one.
+
+  **Implementation note and known limitation.** `overlap.py` uses an explicit
+  stopword list plus conservative suffix stripping ("directors" -> "director"),
+  not spaCy lemmatization. This is deliberate: it is deterministic, needs no
+  model download, runs offline in tests, and errs toward over-flagging rather
+  than under-flagging — the safer direction for a check whose failure mode is
+  "leaked vocabulary into a paraphrase query." Its known limitation is
+  irregular morphology: "ran" does not fold to "run", so an irregular reuse can
+  pass the check unflagged. This is accepted, not fixed by adding a model
+  dependency, because the designed correction path is a human reviewer catching
+  it and overriding in the *other* direction — flagging a shared idea the
+  mechanical check missed — which is exactly what review is for. `en_core_web_sm`
+  stays out of the base install; the check is good enough for what a drafting
+  constraint needs to be.
 - **Human review (decision D4):** every agent-drafted query is reviewed and
   edited before any retrieval code runs. Review is per category, so one
   category's review can complete and be committed while another is still being
