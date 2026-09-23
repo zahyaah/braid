@@ -16,7 +16,18 @@ from __future__ import annotations
 
 import re
 
-_WORD = re.compile(r"[a-z0-9]+")
+# A decimal ("2.2", "12.6") must tokenize as one number, not fragments split
+# at the period -- "[a-z0-9]+" alone splits "2.2" into two bare "2" tokens,
+# so two genuinely different figures like "2.2" and "12.2" would spuriously
+# "share" the digit "2". Numbers with an optional decimal part are matched
+# before the general run, so the decimal point binds to its own number.
+_WORD = re.compile(r"\d+\.\d+|[a-z0-9]+")
+# A possessive clitic ("Disturbed's", "band's") is not itself a content word.
+# Left unstripped, "'s" tokenizes as a bare one-letter "s" that spuriously
+# "overlaps" any *other* possessive anywhere in the passage -- a false
+# positive found by running this at scale on real paraphrase drafts, not a
+# hypothetical.
+_POSSESSIVE = re.compile(r"'s\b")
 
 # Function words carry no topical content, so sharing them is not vocabulary reuse.
 STOPWORDS = frozenset(
@@ -31,7 +42,13 @@ STOPWORDS = frozenset(
     """.split()  # noqa: SIM905 - one word per column reads better than a 130-item literal
 )
 
-_SUFFIXES = ("ies", "ing", "ed", "es", "s", "ly")
+# True "es" pluralization only follows a sibilant or affricate ending
+# (boxes, watches, wishes, buzzes, glasses) -- stripping "es" unconditionally
+# also matches silent-e plurals like "notes" or "votes", corrupting them to
+# "not" and "vot". Checked *before* the generic suffix loop, which then only
+# strips the trailing "s" from those, correctly yielding "note" and "vote".
+_ES_PLURAL = re.compile(r"(?:[sxz]es|(?:ch|sh)es)$")
+_SUFFIXES = ("ies", "ing", "ed", "s", "ly")
 
 
 def fold(word: str) -> str:
@@ -39,6 +56,8 @@ def fold(word: str) -> str:
     lowered = word.lower()
     if lowered in STOPWORDS or len(lowered) <= 3:
         return lowered
+    if _ES_PLURAL.search(lowered) and len(lowered) - 2 >= 3:
+        return lowered[:-2]
     for suffix in _SUFFIXES:
         if lowered.endswith(suffix) and len(lowered) - len(suffix) >= 3:
             stem = lowered[: -len(suffix)]
@@ -50,7 +69,8 @@ def fold(word: str) -> str:
 
 def content_words(text: str) -> set[str]:
     """Folded, non-stopword tokens. Numbers count as content."""
-    return {fold(token) for token in _WORD.findall(text.lower()) if token not in STOPWORDS}
+    stripped = _POSSESSIVE.sub("", text.lower())
+    return {fold(token) for token in _WORD.findall(stripped) if token not in STOPWORDS}
 
 
 def shared_terms(query: str, passage_text: str) -> tuple[str, ...]:
