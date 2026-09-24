@@ -178,8 +178,13 @@ def test_empty_query_returns_empty():
     assert retriever.search("   ", k=10) == []
 
 
-def test_missing_corpus_entry_uses_empty_text():
-    """A passage_id absent from the corpus must be scored against '' without crash."""
+def test_missing_corpus_entry_fails_closed():
+    """A candidate id absent from the corpus must raise, not score against ''.
+
+    Found by adversarial review: `corpus.get(pid, "")` silently scored an empty
+    string for a missing id (and an absent corpus file yielded an empty mapping,
+    so *every* candidate did), producing plausible-looking wrong rankings.
+    """
     base = _stub_retriever(passage_ids=["known", "unknown"])
     corpus = {"known": "some text"}  # 'unknown' deliberately absent
     retriever = RerankRetriever(
@@ -187,8 +192,23 @@ def test_missing_corpus_entry_uses_empty_text():
         model=_ConstantScoreModel(),
         corpus=corpus,
     )
-    hits = retriever.search("query", k=2)
-    assert {h.passage_id for h in hits} == {"known", "unknown"}
+    with pytest.raises(KeyError, match="missing from corpus"):
+        retriever.search("query", k=2)
+
+
+def test_missing_corpus_file_raises(tmp_path):
+    from braid.query.rerank import _load_corpus
+
+    with pytest.raises(FileNotFoundError):
+        _load_corpus(tmp_path / "nope.jsonl")
+
+
+def test_inference_max_length_is_explicit_and_shared():
+    """Pretrained and fine-tuned rerankers must be scored at the same explicit
+    max_length (review finding: they previously differed, 512 vs 256)."""
+    from braid.query.rerank import INFERENCE_MAX_LENGTH, _get_cross_encoder  # noqa: F401
+
+    assert INFERENCE_MAX_LENGTH == 512
 
 
 def test_reranker_fetches_rerank_k_from_base():

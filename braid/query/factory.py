@@ -7,6 +7,7 @@ are guaranteed to call the identical retrieval code path.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from braid.query.base import Retriever
@@ -22,7 +23,10 @@ SUPPORTED_CONFIGS: tuple[str, ...] = (
 # The fine-tuned cross-encoder checkpoint produced by `python -m braid.finetune`
 # (Task 37). `fused-rerank-ft` reranks with this model instead of the pretrained
 # `ms-marco-MiniLM-L-6-v2` that `fused-rerank` uses.
-FINETUNED_MODEL_PATH = "models/ce-braid"
+# Resolved against the repo root, not the working directory: a relative path
+# would fail (or, worse, resolve to a Hugging Face Hub repo id) whenever the
+# process is started from another directory.
+FINETUNED_MODEL_PATH = str(Path(__file__).resolve().parents[2] / "models" / "ce-braid")
 
 _REGISTRY: dict[str, Callable[..., Retriever]] = {}
 

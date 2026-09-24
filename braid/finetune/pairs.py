@@ -70,6 +70,21 @@ class ExclusionSets:
 
     question_ids: frozenset[str]
     passage_ids: frozenset[str]
+    # Normalized body-text keys of every excluded passage (see `text_key`).
+    # ID-only exclusion fails open for a passage that is textually the same but
+    # hashes to a different `passage_id` (title casing, an HTML entity, a
+    # whitespace variant) -- found by adversarial review.
+    passage_text_keys: frozenset[str] = frozenset()
+
+
+def text_key(text: str) -> str:
+    """Normalization for text-level leak detection: HTML-unescape, NFKC,
+    casefold, collapse whitespace. Deliberately looser than `passage_id`."""
+    import html
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    return " ".join(folded.split())
 
 
 @dataclass(frozen=True)
@@ -91,6 +106,11 @@ class PairReport:
     excluded_question_count: int
     excluded_passage_count: int
     remaining_pool_size: int
+    # Candidate questions removed because they overlapped the evaluation set.
+    # Reported so the (otherwise silent) filter is visible, not just implied by
+    # a smaller pool.
+    dropped_id_overlap: int = 0
+    dropped_text_overlap: int = 0
 
     @property
     def ratio(self) -> float:
@@ -107,6 +127,8 @@ class PairReport:
             "excluded_question_count": self.excluded_question_count,
             "excluded_passage_count": self.excluded_passage_count,
             "remaining_pool_size": self.remaining_pool_size,
+            "dropped_id_overlap": self.dropped_id_overlap,
+            "dropped_text_overlap": self.dropped_text_overlap,
         }
 
 
@@ -144,7 +166,9 @@ def _row_passages(row: dict[str, Any]) -> QuestionPassages:
 
 
 def compute_exclusion_sets(
-    queries: Sequence[LabeledQuery], row_by_id: dict[str, dict[str, Any]]
+    queries: Sequence[LabeledQuery],
+    row_by_id: dict[str, dict[str, Any]],
+    corpus_texts: dict[str, str] | None = None,
 ) -> ExclusionSets:
     """The union of every evaluation question's IDs and referenced passage IDs.
 
@@ -152,20 +176,42 @@ def compute_exclusion_sets(
     evaluation query — gold AND distractor — not gold alone. For the 60 multi-hop
     queries (origin=hotpotqa, source_question_id set) the distractors are not
     stored anywhere, so they are recomputed from the source row here.
+
+    Fails closed: a multi-hop query whose source question cannot be found used to
+    silently shrink the exclusion set (its distractors simply weren't added).
+    That now raises, since an unresolvable source question means the exclusion
+    set cannot be trusted. Likewise, when `corpus_texts` is given, a relevant
+    passage id missing from it raises rather than being skipped.
     """
     question_ids: set[str] = set()
     passage_ids: set[str] = set()
+    keys: set[str] = set()
 
     for query in queries:
         passage_ids.update(query.relevant.keys())
+        if corpus_texts is not None:
+            for pid in query.relevant:
+                if pid not in corpus_texts:
+                    raise LeakageError(
+                        f"evaluation query {query.query_id} references passage {pid} "
+                        "that is not in the corpus; cannot build its text exclusion key"
+                    )
+                keys.add(text_key(corpus_texts[pid]))
         if query.source_question_id:
             question_ids.add(query.source_question_id)
             row = row_by_id.get(query.source_question_id)
-            if row is not None:
-                qp = _row_passages(row)
-                passage_ids.update(d.passage_id for d in qp.distractors)
+            if row is None:
+                raise LeakageError(
+                    f"evaluation query {query.query_id} has source_question_id "
+                    f"{query.source_question_id!r} that is not in the dataset; "
+                    "its distractors cannot be excluded"
+                )
+            qp = _row_passages(row)
+            for ref in (*qp.gold, *qp.distractors):
+                passage_ids.add(ref.passage_id)
+                keys.add(text_key(ref.text))
 
-    return ExclusionSets(frozenset(question_ids), frozenset(passage_ids))
+    return ExclusionSets(frozenset(question_ids), frozenset(passage_ids), frozenset(keys))
 
 
 def assert_no_leakage(questions: Sequence[QuestionPassages], exclusion: ExclusionSets) -> None:
@@ -180,6 +226,11 @@ def assert_no_leakage(questions: Sequence[QuestionPassages], exclusion: Exclusio
                     f"passage {ref.passage_id} (from question {qp.question_id}) "
                     "overlaps the evaluation set"
                 )
+            elif text_key(ref.text) in exclusion.passage_text_keys:
+                problems.append(
+                    f"passage {ref.passage_id} (from question {qp.question_id}) has the "
+                    "same normalized text as an evaluation passage under a different id"
+                )
     if problems:
         detail = "; ".join(problems[:10])
         raise LeakageError(
@@ -193,21 +244,27 @@ def build_training_questions(
     *,
     seed: int = FINETUNE_SEED,
     num_questions: int = DEFAULT_NUM_TRAIN_QUESTIONS,
+    corpus_texts: dict[str, str] | None = None,
 ) -> tuple[list[QuestionPassages], PairReport]:
     """Draw `num_questions` HotpotQA questions disjoint from the evaluation set."""
     row_by_id = {row["id"]: row for row in dataset}
-    exclusion = compute_exclusion_sets(queries, row_by_id)
+    exclusion = compute_exclusion_sets(queries, row_by_id, corpus_texts)
 
     candidates: list[QuestionPassages] = []
+    dropped_id = dropped_text = 0
     for row in dataset:
         if row["id"] in exclusion.question_ids:
             continue
         qp = _row_passages(row)
         if not qp.gold:
             continue  # no resolvable gold; cannot build positives
-        all_pids = {r.passage_id for r in (*qp.gold, *qp.distractors)}
-        if all_pids & exclusion.passage_ids:
+        refs = (*qp.gold, *qp.distractors)
+        if {r.passage_id for r in refs} & exclusion.passage_ids:
+            dropped_id += 1
             continue  # any gold OR distractor overlap → drop the whole question
+        if any(text_key(r.text) in exclusion.passage_text_keys for r in refs):
+            dropped_text += 1
+            continue  # same text under a different id → drop the whole question
         candidates.append(qp)
 
     rng = np.random.default_rng(seed)
@@ -225,6 +282,8 @@ def build_training_questions(
         excluded_question_count=len(exclusion.question_ids),
         excluded_passage_count=len(exclusion.passage_ids),
         remaining_pool_size=len(candidates),
+        dropped_id_overlap=dropped_id,
+        dropped_text_overlap=dropped_text,
     )
     return selected, report
 
@@ -275,10 +334,13 @@ def build_pairs_from_disk(
     queryset_dir: Path = QUERYSET_DIR,
 ) -> tuple[list[Pair], PairReport]:
     """End-to-end: load HotpotQA + eval queries, build disjoint pairs, write files."""
+    from braid.ingest.models import load_corpus
+
     queries = read_queries(queryset_dir / QUERIES_FILE)
     dataset = load_hotpotqa(SPLIT)
+    corpus_texts = {p.passage_id: p.text for p in load_corpus(Path("data/corpus.jsonl"))}
     questions, report = build_training_questions(
-        dataset, queries, seed=seed, num_questions=num_questions
+        dataset, queries, seed=seed, num_questions=num_questions, corpus_texts=corpus_texts
     )
     pairs = build_pairs(questions)
     write_pairs(PAIRS_PATH, pairs)

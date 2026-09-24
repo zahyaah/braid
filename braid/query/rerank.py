@@ -20,6 +20,15 @@ from braid.query.fusion import FusedRetriever
 
 DEFAULT_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 DEFAULT_CORPUS_PATH = Path("data/corpus.jsonl")
+# Inference max_length, stated explicitly and applied identically to the
+# pretrained and the fine-tuned reranker. Found by adversarial review: the
+# fine-tuned checkpoint was trained (and its tokenizer saved) at 256 while the
+# pretrained model silently scored at sentence-transformers' 512 default, so
+# `fused-rerank` vs `fused-rerank-ft` differed in truncation as well as
+# weights (74 of 1000 passages exceed ~170 words). 512 is kept so the
+# pretrained baseline's reported numbers do not change; the fine-tuned model
+# is scored at 512 as well (its position embeddings support it).
+INFERENCE_MAX_LENGTH = 512
 
 _cross_encoder_cache: dict[str, Any] = {}
 _corpus_cache: dict[str, dict[str, str]] = {}
@@ -29,27 +38,33 @@ def _load_corpus(path: Path = DEFAULT_CORPUS_PATH) -> dict[str, str]:
     """Load passage texts from corpus.jsonl, cached at module level."""
     key = str(path)
     if key not in _corpus_cache:
+        if not path.exists():
+            # Fail closed: a missing corpus used to yield an empty mapping, so
+            # every candidate silently scored against "" with no error.
+            raise FileNotFoundError(f"corpus not found at {path}; cannot rerank without text")
         mapping: dict[str, str] = {}
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        row = json.loads(line)
-                        pid = row["passage_id"]
-                        title = row.get("title", "")
-                        text = row.get("text", "")
-                        mapping[pid] = f"{title}: {text}" if title else text
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    pid = row["passage_id"]
+                    title = row.get("title", "")
+                    text = row.get("text", "")
+                    mapping[pid] = f"{title}: {text}" if title else text
         _corpus_cache[key] = mapping
     return _corpus_cache[key]
 
 
-def _get_cross_encoder(name_or_path: str = DEFAULT_MODEL_NAME) -> Any:
-    """Load CrossEncoder model once per process."""
-    if name_or_path not in _cross_encoder_cache:
+def _get_cross_encoder(
+    name_or_path: str = DEFAULT_MODEL_NAME, max_length: int = INFERENCE_MAX_LENGTH
+) -> Any:
+    """Load CrossEncoder model once per process, keyed by (model, max_length)."""
+    key = f"{name_or_path}@{max_length}"
+    if key not in _cross_encoder_cache:
         from sentence_transformers import CrossEncoder
 
-        _cross_encoder_cache[name_or_path] = CrossEncoder(name_or_path)
-    return _cross_encoder_cache[name_or_path]
+        _cross_encoder_cache[key] = CrossEncoder(name_or_path, max_length=max_length)
+    return _cross_encoder_cache[key]
 
 
 class RerankRetriever:
@@ -112,7 +127,10 @@ class RerankRetriever:
             return []
 
         corpus = self._get_corpus_mapping()
-        pairs = [(query, corpus.get(h.passage_id, "")) for h in base_hits]
+        missing = [h.passage_id for h in base_hits if h.passage_id not in corpus]
+        if missing:
+            raise KeyError(f"candidate passage ids missing from corpus: {missing[:5]}")
+        pairs = [(query, corpus[h.passage_id]) for h in base_hits]
 
         model = self._get_model_instance()
         scores = model.predict(pairs, batch_size=32)

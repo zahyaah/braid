@@ -20,13 +20,15 @@ from braid.extract.ner import extract_entities, load_pipeline, peak_rss_mb
 from braid.extract.patterns import extract_document
 from braid.ingest.freeze import FrozenCorpusError
 from braid.ingest.manifest import Manifest, utc_now
-from braid.ingest.models import Passage, load_corpus, write_jsonl
+from braid.ingest.models import Passage, load_corpus, read_jsonl, write_jsonl
 
 DEFAULT_CORPUS = Path("data/corpus.jsonl")
 DEFAULT_CORPUS_MANIFEST = Path("data/manifest.json")
 DEFAULT_TRIPLES = Path("data/triples.jsonl")
 DEFAULT_EXTRACT_MANIFEST = Path("data/extract-manifest.json")
 DEFAULT_SAMPLE = Path("data/extract-sample.jsonl")
+DEFAULT_GOLD = Path("data/extract-gold.jsonl")
+DEFAULT_QUALITY_REPORT = Path("reports/extraction-quality.md")
 DEFAULT_SAMPLE_SIZE = 100
 DEFAULT_SEED = 20260923
 
@@ -123,6 +125,46 @@ def cmd_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_quality(args: argparse.Namespace) -> int:
+    """Reproduce reports/extraction-quality.md from gold + extracted triples.
+
+    The gold annotations (data/extract-gold.jsonl) and the sampled sentences
+    (data/extract-sample.jsonl) are committed; the extracted triples are the
+    freshly built data/triples.jsonl, so this reproduces the reported numbers
+    deterministically.
+    """
+    from braid.extract.quality import (
+        ANNOTATION_ORDER_NOTE,
+        METHODOLOGY_SECTION,
+        GoldTriple,
+        compare,
+        render_markdown,
+    )
+
+    gold = [GoldTriple(**row) for row in read_jsonl(args.gold)]
+    extracted = [Triple.from_json(row) for row in read_jsonl(args.triples)]
+    sample_size = sum(1 for _ in read_jsonl(args.sample))
+
+    histogram: dict[str, int] = {}
+    for t in extracted:
+        histogram[t.relation] = histogram.get(t.relation, 0) + 1
+
+    report = compare(
+        gold,
+        extracted,
+        full_run_triple_count=len(extracted),
+        full_run_relation_histogram=histogram,
+    )
+    markdown = render_markdown(
+        report, sample_size=sample_size, annotation_order_note=ANNOTATION_ORDER_NOTE
+    )
+    markdown += "\n" + METHODOLOGY_SECTION + "\n"
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(markdown, encoding="utf-8")
+    print(f"extraction quality report -> {args.out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="braid.extract")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
@@ -140,6 +182,13 @@ def main(argv: list[str] | None = None) -> int:
     sample.add_argument("--seed", type=int, default=DEFAULT_SEED)
     sample.add_argument("--out", type=Path, default=DEFAULT_SAMPLE)
     sample.set_defaults(func=cmd_sample)
+
+    quality = sub.add_parser("quality", help="reproduce the extraction quality report")
+    quality.add_argument("--gold", type=Path, default=DEFAULT_GOLD)
+    quality.add_argument("--triples", type=Path, default=DEFAULT_TRIPLES)
+    quality.add_argument("--sample", type=Path, default=DEFAULT_SAMPLE)
+    quality.add_argument("--out", type=Path, default=DEFAULT_QUALITY_REPORT)
+    quality.set_defaults(func=cmd_quality)
 
     args = parser.parse_args(argv)
     return args.func(args)

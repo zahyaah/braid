@@ -10,6 +10,7 @@ Every hyperparameter and both seeds are recorded in ``reports/finetune.md``.
 
 from __future__ import annotations
 
+import json
 import platform
 import random
 import time
@@ -27,11 +28,13 @@ from braid.ingest.models import read_jsonl
 from braid.query.rerank import DEFAULT_MODEL_NAME
 
 # Hyperparameters (recorded verbatim in reports/finetune.md).
+# Batch size and sequence length are kept small because this fine-tune runs on
+# an 8 GB machine that is also hosting the OpenSearch and Neo4j containers.
 EPOCHS = 3
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 100
-MAX_SEQ_LEN = 512
+MAX_SEQ_LEN = 256
 LOSS = "BinaryCrossEntropyLoss"
 SCHEDULER = "WarmupLinear"
 WEIGHT_DECAY = 0.01
@@ -70,23 +73,36 @@ class TrainingReport:
     wall_clock_seconds: float
     hardware: str
     best_val_accuracy: float
+    dev_majority_baseline: float = 0.0
+    dev_pairs_dropped_for_passage_overlap: int = 0
+    dev_history: tuple = ()
 
 
-class _RecordingEvaluator:
-    """Wraps a cross-encoder evaluator to capture the best score it reports."""
+class _RecordingEvaluator(CEBinaryAccuracyEvaluator):
+    """CEBinaryAccuracyEvaluator that also records its best dev accuracy.
 
-    def __init__(self, evaluator) -> None:
-        self._evaluator = evaluator
+    Subclasses the real evaluator (rather than wrapping it) so that the
+    trainer's ``isinstance(evaluator, SentenceEvaluator)`` check passes and the
+    evaluator is NOT wrapped in a ``SequentialEvaluator`` (which would treat the
+    single evaluator as an iterable and raise ``TypeError``).
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.best = -1.0
+        # (epoch, steps, accuracy) at every evaluation, so the reported best
+        # dev accuracy is verifiable from an artifact rather than only from a
+        # step-level number the evaluator's own CSV never records.
+        self.history: list[tuple[float, int, float]] = []
 
-    def __getattr__(self, name):
-        return getattr(self._evaluator, name)
-
-    def __call__(self, *args, **kwargs):
-        score = self._evaluator(*args, **kwargs)
-        value = score if isinstance(score, (int, float)) else (score[0] if score else 0.0)
-        self.best = max(self.best, float(value))
-        return score
+    def __call__(self, model, output_path=None, epoch=-1, steps=-1):
+        metrics = super().__call__(model, output_path=output_path, epoch=epoch, steps=steps)
+        # metrics are name-prefixed, e.g. {"dev_accuracy": ..., "dev_f1": ...}
+        for key, value in metrics.items():
+            if key.endswith("accuracy"):
+                self.best = max(self.best, float(value))
+                self.history.append((float(epoch), int(steps), round(float(value), 4)))
+        return metrics
 
 
 def _pick_device() -> str:
@@ -124,6 +140,13 @@ def split_pairs(
     val_qids = set(qids[:n_val])
     train = [p for p in pairs if p.guid.split(":")[0] not in val_qids]
     dev = [p for p in pairs if p.guid.split(":")[0] in val_qids]
+    # Question-level split alone does not stop a *passage* appearing in both
+    # halves (HotpotQA reuses paragraphs across questions; 13 such passages, and
+    # 2 texts labelled both gold and distractor, exist in the shipped pairs).
+    # A dev pair whose passage the model trained on would inflate the dev score
+    # that picks the checkpoint, so such dev pairs are dropped.
+    train_passages = {p.passage for p in train}
+    dev = [p for p in dev if p.passage not in train_passages]
     return train, dev
 
 
@@ -153,6 +176,17 @@ def train(
     train_pairs, dev_pairs = split_pairs(
         pairs, validation_fraction=validation_fraction, seed=train_seed
     )
+    n_dev_before_guard = len(
+        [p for p in pairs if p.guid.split(":")[0] in {q.guid.split(":")[0] for q in dev_pairs}]
+    )
+    # Seeds every RNG the loop draws from (python/numpy/torch): batch shuffle,
+    # dropout, classifier-head init. NB the legacy `CrossEncoder.fit` builds its
+    # own trainer with HF's default seed (42), which this cannot override, and
+    # MPS kernels are not bit-deterministic -- see the report's Reproducibility
+    # section for what that means for rerunning.
+    from transformers import set_seed
+
+    set_seed(train_seed)
 
     train_examples = [
         InputExample(guid=p.guid, texts=[p.query, p.passage], label=p.label)
@@ -163,13 +197,12 @@ def train(
         train_examples, shuffle=True, batch_size=batch_size, collate_fn=lambda batch: batch
     )
 
-    evaluator = CEBinaryAccuracyEvaluator(
+    recording = _RecordingEvaluator(
         sentence_pairs=[[p.query, p.passage] for p in dev_pairs],
         labels=[p.label for p in dev_pairs],
         name="dev",
         batch_size=32,
     )
-    recording = _RecordingEvaluator(evaluator)
 
     start = time.monotonic()
     model.fit(
@@ -187,6 +220,15 @@ def train(
         show_progress_bar=True,
     )
     wall = time.monotonic() - start
+
+    dev_positive_rate = sum(p.label for p in dev_pairs) / max(1, len(dev_pairs))
+    majority_baseline = max(dev_positive_rate, 1.0 - dev_positive_rate)
+    history = tuple(recording.history)
+    hist_path = Path(output_dir) / "dev-history.json"
+    hist_path.write_text(
+        json.dumps({"dev_accuracy_history": history, "majority_baseline": majority_baseline}),
+        encoding="utf-8",
+    )
 
     return TrainingReport(
         base_checkpoint=base_checkpoint,
@@ -211,6 +253,9 @@ def train(
         wall_clock_seconds=round(wall, 1),
         hardware=_hardware(device),
         best_val_accuracy=round(recording.best, 4),
+        dev_majority_baseline=round(majority_baseline, 4),
+        dev_pairs_dropped_for_passage_overlap=n_dev_before_guard - len(dev_pairs),
+        dev_history=history,
     )
 
 
@@ -231,6 +276,8 @@ Cross-encoder fine-tuning on HotpotQA data disjoint from the evaluation set.
 - excluded evaluation questions: {p.excluded_question_count}
 - excluded evaluation passages (gold + distractor): {p.excluded_passage_count}
 - remaining training-pool size: {p.remaining_pool_size}
+- questions dropped for overlapping the eval set: {p.dropped_id_overlap} by passage id,
+  {p.dropped_text_overlap} by normalized text only
 
 ## Hyperparameters
 
@@ -252,18 +299,37 @@ Cross-encoder fine-tuning on HotpotQA data disjoint from the evaluation set.
 ## Seeds
 
 - pairs seed: `{training.pairs_seed}`
-- train/dev split seed: `{training.train_seed}`
+- train/dev split seed, and `transformers.set_seed` before training: `{training.train_seed}`
+- trainer seed inside the legacy `CrossEncoder.fit`: `42` (HF default; not settable through `fit`)
 
 ## Split
 
 - train pairs: {training.num_train_pairs}
 - dev pairs: {training.num_dev_pairs}
 - split by question ID (no query text spans both splits)
+- dev pairs dropped (passage also in train): {training.dev_pairs_dropped_for_passage_overlap}
 
 ## Run
 
 - best dev accuracy: {training.best_val_accuracy:.4f}
+  (majority-class baseline, same dev pairs: {training.dev_majority_baseline:.4f})
+- checkpoint selection: best-dev-accuracy checkpoint kept (`save_best_model`);
+  **no early stopping**, all epochs run. Selection reads dev pairs carved from the
+  training sample only; the evaluation set is never read.
+- per-evaluation dev history: `{training.output_dir}/dev-history.json`
+  ({len(training.dev_history)} evaluations)
 - wall clock: {training.wall_clock_seconds}s
 - hardware: `{training.hardware}`
 - output: `{training.output_dir}`
+
+## Reproducibility (read before trusting a rerun)
+
+Training ran on MPS (Apple GPU), whose kernels are not bit-deterministic, and the
+legacy `CrossEncoder.fit` seeds its own trainer with 42. Rerunning with the same
+seeds reproduces the *training data* exactly (pairs seed, split seed) but **not**
+the weights bit-for-bit; expect small run-to-run differences in the fine-tuned
+scores. The before/after comparison in `reports/comparison.md` is therefore one
+training run, not an average over runs. Dev accuracy near the majority-class
+baseline would mean the classifier barely learned the task; compare the two
+numbers above.
 """

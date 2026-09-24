@@ -17,6 +17,7 @@ data/*
 !data/extract-gold.jsonl
 !data/extract-manifest.json
 models/
+checkpoints/
 reports/*.png
 # Stub-run output is placeholder data proving the harness runs end to end,
 # not evidence. reports/*.md otherwise stays tracked -- extraction-quality.md,

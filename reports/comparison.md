@@ -18,6 +18,10 @@
 | fused-rerank | paraphrase | 0.7000 | 0.8500 | 0.5837 | 0.5015 |
 | fused-rerank | multi-hop-relational | 0.8917 | 0.9750 | 0.9116 | 0.9806 |
 | fused-rerank | pooled | 0.8639 | 0.9417 | 0.8286 | 0.8232 |
+| fused-rerank-ft | exact-term | 1.0000 | 1.0000 | 0.9528 | 0.9372 |
+| fused-rerank-ft | paraphrase | 0.6000 | 0.7333 | 0.5260 | 0.4616 |
+| fused-rerank-ft | multi-hop-relational | 0.9583 | 0.9833 | 0.9364 | 0.9722 |
+| fused-rerank-ft | pooled | 0.8528 | 0.9056 | 0.8051 | 0.7903 |
 
 ## Criterion 2: fused-rerank vs best single-method baseline
 
@@ -39,3 +43,26 @@
 | pooled | recall@10 | dense | 0.9389 | 0.9417 | +0.0028 | [-0.0361, 0.0444] | no |
 | pooled | ndcg@10 | dense | 0.8318 | 0.8286 | -0.0032 | [-0.0418, 0.0346] | no |
 | pooled | mrr | dense | 0.8228 | 0.8232 | +0.0004 | [-0.0408, 0.0468] | no |
+
+## Before/after: fine-tuned cross-encoder vs pretrained
+
+`after` = `fused-rerank-ft` (models/ce-braid), `before` = `fused-rerank` (cross-encoder/ms-marco-MiniLM-L-6-v2). Both rerank the identical `fused` top-50 candidate list. A positive diff means the fine-tuned model scores higher; a null or negative result is reported at the same prominence as a positive one.
+
+| Category | Metric | Before (pretrained) | After (fine-tuned) | Diff | 95% CI | Excludes zero |
+|----------|--------|--------------------:|-------------------:|-----:|--------|:-------------:|
+| exact-term | recall@5 | 1.0000 | 1.0000 | +0.0000 | [0.0000, 0.0000] | no |
+| exact-term | recall@10 | 1.0000 | 1.0000 | +0.0000 | [0.0000, 0.0000] | no |
+| exact-term | ndcg@10 | 0.9905 | 0.9528 | -0.0377 | [-0.0741, -0.0083] | yes |
+| exact-term | mrr | 0.9875 | 0.9372 | -0.0503 | [-0.0961, -0.0119] | yes |
+| paraphrase | recall@5 | 0.7000 | 0.6000 | -0.1000 | [-0.2333, 0.0333] | no |
+| paraphrase | recall@10 | 0.8500 | 0.7333 | -0.1167 | [-0.2167, -0.0167] | yes |
+| paraphrase | ndcg@10 | 0.5837 | 0.5260 | -0.0577 | [-0.1470, 0.0409] | no |
+| paraphrase | mrr | 0.5015 | 0.4616 | -0.0400 | [-0.1530, 0.0675] | no |
+| multi-hop-relational | recall@5 | 0.8917 | 0.9583 | +0.0667 | [0.0167, 0.1250] | yes |
+| multi-hop-relational | recall@10 | 0.9750 | 0.9833 | +0.0083 | [0.0000, 0.0250] | no |
+| multi-hop-relational | ndcg@10 | 0.9116 | 0.9364 | +0.0248 | [0.0002, 0.0490] | yes |
+| multi-hop-relational | mrr | 0.9806 | 0.9722 | -0.0083 | [-0.0335, 0.0250] | no |
+| pooled | recall@5 | 0.8639 | 0.8528 | -0.0111 | [-0.0611, 0.0333] | no |
+| pooled | recall@10 | 0.9417 | 0.9056 | -0.0361 | [-0.0750, -0.0028] | yes |
+| pooled | ndcg@10 | 0.8286 | 0.8051 | -0.0236 | [-0.0613, 0.0093] | no |
+| pooled | mrr | 0.8232 | 0.7903 | -0.0329 | [-0.0727, 0.0069] | no |

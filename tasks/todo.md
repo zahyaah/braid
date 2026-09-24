@@ -563,9 +563,14 @@ not. No subset selection.
 and the extraction-yield figures alongside it) in `reports/graph-vs-vector.md`.
 The two graph-win queries: `mh-5a8b77705542995d1e6f13aa` (passage
 `a5199661aff3f82d`) and `mh-5a8da1815542994ba4e3dcd7` (passage
-`a14ae039c63091d8`). The low count is consistent with the paraphrase framing
-and the multi-hop queries' reliance on the two drafted categories' vocabulary
-rather than graph edges.
+`a14ae039c63091d8`). **Cause (verified, corrects an earlier rationale that
+blamed "paraphrase framing"):** a ceiling effect. Multi-hop queries are
+HotpotQA-native, not drafted, and dense retrieval already surfaces every gold
+passage in its top-10 for 54 of 60 of them (dense multi-hop recall@10 = 0.95),
+so only **6 of 60** queries had *any* headroom for a graph-win; the count is
+capped at 6 and came in at 2. Graph provenance is non-zero on a gold passage in
+46 of 60 queries, so the graph is contributing signal; it just rarely
+contributes a passage dense had missed.
 
 ### Task 34: CLI — DONE
 **Acceptance:**
@@ -592,67 +597,165 @@ D1 latency in `reports/latency.md`, fused-rerank in `reports/fused-rerank.md`.
 
 ## Phase 7: `finetune`
 
-### Task 35: Disjoint pair construction and leakage assertion
+### Task 35: Disjoint pair construction and leakage assertion — DONE (hardened after review)
 **Acceptance:**
-- [ ] Training questions drawn with a recorded seed from HotpotQA questions not in the evaluation set
-- [ ] Positives = gold paragraphs; hard negatives = that question's distractors; ratio and counts recorded
-- [ ] Excluded set is the **union of every evaluation question's gold and distractor passages** (amendment 4), not gold only
-- [ ] Two contaminated fixtures each abort the run: one sharing a gold passage, one sharing only a distractor
-- [ ] Excluded-set size and remaining training-pool size both recorded
+- [x] Training questions drawn with a recorded seed from HotpotQA questions not in the evaluation set
+- [x] Positives = gold paragraphs; hard negatives = that question's distractors; ratio and counts recorded
+- [x] Excluded set is the **union of every evaluation question's gold and distractor passages** (amendment 4), not gold only — plus every `relevant` passage of all 180 queries
+- [x] Two contaminated fixtures each abort the run: one sharing a gold passage, one sharing only a distractor — now also exercised **through the real `build_training_questions` path**, not only the assertion on hand-built objects
+- [x] Excluded-set size and remaining training-pool size both recorded (plus dropped-candidate counts)
 **Verify:** `pytest tests/finetune/test_leakage.py -q`
 **Dependencies:** 34. **Scope:** M. **Files:** `braid/finetune/pairs.py`, `tests/finetune/test_leakage.py`
 
-### Task 36: Training run
+**Independent leakage check on the real data (2026-09-24):** 300 training questions,
+0 overlap with eval question ids; 0 training passages equal an eval-relevant
+passage by text; 0 training query texts equal an eval query text.
+
+**Fixes from the Checkpoint G adversarial review (fresh-context subagent):**
+(a) exclusion fails **closed** — an unresolvable `source_question_id` or a
+relevant id missing from the corpus now raises `LeakageError` (was: silently
+shrank the exclusion set); (b) added a **text-level** exclusion key (HTML-unescape,
+NFKC, casefold, whitespace) so the same paragraph under a different `passage_id`
+is caught; (c) the filter's drops are now **reported** (`dropped_id_overlap`,
+`dropped_text_overlap`) since the downstream assertion is defense-in-depth and
+otherwise unreachable; (d) 7 new tests incl. gold-only, distractor-only and
+same-text-different-id contaminated datasets through the real pipeline.
+
+### Task 36: Training run — DONE (retrained after review; see Checkpoint G)
 **Acceptance:**
-- [ ] Early stopping and checkpoint selection use a split carved from the **training** sample only
-- [ ] `reports/finetune.md` records base checkpoint, epochs, batch size, learning rate, warmup, max seq length, loss, seeds, wall clock, hardware
+- [x] Early stopping and checkpoint selection use a split carved from the **training** sample only. Correction: there is **no early stopping** (best-dev-checkpoint saving only); reports now say so.
+- [x] `reports/finetune.md` records base checkpoint, epochs, batch size, learning rate, warmup, max seq length, loss, seeds, wall clock, hardware
 **Verify:** `python -m braid.finetune --out models/ce-braid`
 **Dependencies:** 35. **Scope:** M. **Files:** `braid/finetune/train.py`, `reports/finetune.md`
 
-### Task 37: Before/after comparison
+**Fixes from review:** passage-level train/dev guard (dev pairs whose passage is
+also in train are dropped — question-level split alone left 13 shared passages);
+majority-class baseline reported next to best dev accuracy (dev is ~20% positive,
+so an all-negative predictor already scores ~0.80); per-evaluation dev history
+written to `models/ce-braid/dev-history.json`; seeds reported honestly (split
+seed vs the trainer's HF default 42, which legacy `CrossEncoder.fit` cannot
+override); MPS non-determinism stated — reruns reproduce the *data*, not the
+weights bit-for-bit.
+
+### Task 37: Before/after comparison — DONE (rerun after review; see Checkpoint G)
 **Acceptance:**
-- [ ] `fused-rerank` vs `fused-rerank-ft` on the held-out set, all four metrics, per category and pooled
-- [ ] Both configurations share the same `fused` candidate list and rerank depth exactly
-- [ ] Each difference carries a paired-bootstrap 95% CI and an "excludes zero" statement
-- [ ] A null or negative result is reported at the same prominence as a positive one
+- [x] `fused-rerank` vs `fused-rerank-ft` on the held-out set, all four metrics, per category and pooled
+- [x] Both configurations share the same `fused` candidate list and rerank depth exactly — **and now the same inference `max_length`** (see below)
+- [x] Each difference carries a paired-bootstrap 95% CI and an "excludes zero" statement
+- [x] A null or negative result is reported at the same prominence as a positive one
 **Verify:** `python -m braid.eval --all-configs --bootstrap 1000`
 **Dependencies:** 36. **Scope:** S. **Files:** `braid/finetune/compare.py`, `reports/comparison.md`
 
-### Checkpoint G — criterion 4 is answerable
-- [ ] Leakage assertion passes on real data and aborts on both contaminated fixtures
-- [ ] Before/after numbers reported with CIs
-- [ ] Adversarial fresh-context review of the fine-tuning path complete (workflow step 7)
-- [ ] **Human review before proceeding**
+**Confound found and fixed:** the first before/after run was invalid as a
+"weights only" comparison — the fine-tuned checkpoint scored at `max_length=256`
+(trained + tokenizer saved at 256) while the pretrained model silently scored at
+sentence-transformers' 512 default; 74 of 1000 passages exceed ~170 words. Both
+now use an explicit shared `INFERENCE_MAX_LENGTH = 512`, so the pretrained
+baseline's numbers are unchanged. Also fixed: fine-tuned model path is now
+absolute (was cwd-relative), and a missing corpus / missing candidate id now
+raises instead of silently scoring against `""`.
+
+### Checkpoint G — criterion 4 is answerable — DONE
+- [x] Leakage assertion passes on real data and aborts on both contaminated fixtures (also through the real pipeline path)
+- [x] Before/after numbers reported with CIs — `reports/comparison.md`, rerun **after** the `max_length` fix and retrain (first-run numbers were confounded and are superseded)
+- [x] Adversarial fresh-context review of the fine-tuning path complete (workflow step 7) — 9 findings, all reconciled (see Tasks 35-37)
+- [x] **Human review before proceeding** — via standing authorization on review-path decisions
+
+**Criterion 4 result (corrected comparison; identical fused top-50, depth 50, `max_length` 512 for both):**
+fine-tuning **helps multi-hop** (recall@5 +0.0667 [0.0167, 0.1250]; ndcg@10 +0.0248
+[0.0002, 0.0490]) and **hurts elsewhere**: exact-term ndcg@10 -0.0377
+[-0.0741, -0.0083] and mrr -0.0503 [-0.0961, -0.0119]; paraphrase recall@10 -0.1167
+[-0.2167, -0.0167]; pooled recall@10 -0.0361 [-0.0750, -0.0028]. Pooled ndcg@10
+-0.0236 [-0.0613, 0.0093] and mrr -0.0329 [-0.0727, 0.0069] do not exclude zero.
+**Net: no pooled improvement**; training on HotpotQA multi-hop pairs specialized
+the reranker toward that distribution. Dev accuracy 0.8930 vs 0.7993
+majority-class baseline (modest learning). One training run, MPS
+non-deterministic — not an average over runs. 16 CIs per table, **no
+multiplicity correction**; with that many intervals, isolated "excludes zero"
+rows should be read cautiously.
+(The first, confounded run had reported the multi-hop gain as larger and
+exact-term ndcg@10 as -0.0386; both moved once truncation parity was fixed.)
+
+**Finding (not a bug) — why `fused` << `dense`:** pooled ndcg@10 0.5156 vs 0.8318;
+paraphrase gold@1 is **0/60 for fused vs 27/60 for dense**. Paraphrase gold is
+invisible to BM25 (zero content-word overlap *by construction*, so BM25 paraphrase
+recall is exactly 0.0 — an artifact of the query design, not a retrieval finding)
+and to entity-linked graph search, so it earns only 1/(60+rank) from dense alone
+(<= 0.0164), while a decoy present in all three lists at mid ranks earns roughly
+3x that. In 20 of the 27 cases where dense had the gold at rank 1 and fused did
+not, the winning fused hit had bm25+dense+graph provenance. Unweighted 3-way RRF
+rewards consensus across sources; D5 pinned it a priori (never tuned on the
+eval set), so it is reported as-is. The cross-encoder recovers most of it
+(fused-rerank paraphrase ndcg@10 0.5837). Possible future work: source-weighted
+RRF tuned on the D2 training slice, never the eval set.
+
+**Headline for the README:** the hybrid did **not** beat dense retrieval alone in
+this configuration; fused+rerank ~= dense pooled (null), significantly worse on
+paraphrase ndcg@10, and not significantly better anywhere.
 
 ---
 
 ## Phase 8: Reproducibility and release
 
-### Task 38: `scripts/reproduce.sh`
+### Task 38: `scripts/reproduce.sh` — SCRIPT FIXED, FULL CLEAN RUN PENDING
 **Acceptance:**
-- [ ] One script, clean checkout to every reported number: ingest, freeze, extract, index, all five configurations, all tables, CIs, latency, both reports
-- [ ] Seeds pinned and echoed; the script verifies `corpus_hash` matches the committed query set before evaluating, and fails loudly if containers are down
+- [x] One script, clean checkout to every reported number: ingest, freeze, extract, index, all five configurations, all tables, CIs, latency, both reports
+- [x] Seeds pinned and echoed; the script verifies `corpus_hash` matches the committed query set before evaluating, and fails loudly if containers are down
+- [ ] Verified by a full run on a fresh clone with regenerated tables diffed against committed ones — **not yet run** (long: ingest + extract + index + retrain + eval ≈ 30+ min)
 **Verify:** run on a fresh clone; diff regenerated tables against committed ones.
 **Dependencies:** 37. **Scope:** M. **Files:** `scripts/reproduce.sh`
 
-### Task 39: README
+**Defects found by reading the script adversarially (each confirmed by test, all fixed):**
+1. The opening health gate checked all three stores, but on a clean checkout the
+   dense index file does not exist yet (`down`), so **every clean run aborted
+   before building anything**. Added `python -m braid.index health --services-only`
+   and the gate now uses it.
+2. `braid.extract build --corpus … --corpus-manifest …`: those are top-level
+   flags, not `build` flags — argparse would reject them. Removed (defaults apply).
+3. `python -m braid.eval.queryset` with no argument errors (`validate` required).
+   Now `… validate`.
+4. `PAIRS_SEED`/`TRAIN_SEED` were echoed but never passed to `braid.finetune`, so
+   the printed seeds were cosmetic. Now passed as `--pairs-seed/--train-seed`;
+   unused `QUERYSET_SEED` removed.
+
+**Known caveats to state in the README:** `ingest build` rewrites the tracked
+`data/manifest.json` (fresh `frozen_at`, same `corpus_hash`); fine-tuned weights
+are not bit-reproducible (MPS); `extract sample` regenerates the committed
+annotation-sample file.
+
+### Task 39: README — DONE
 **Acceptance:**
-- [ ] Every metric per category and pooled, every CI, the criterion-3 count with its denominator, latency and throughput with warm-up count and concurrency, hardware stated
-- [ ] D5 parameter table reproduced, with a note that no value was tuned on the evaluation set
-- [ ] Query authorship and review process stated plainly (D4), including that multi-hop queries come from HotpotQA and the other two categories are agent-drafted and human-reviewed, plus the paraphrase override count
-- [ ] Limitations: sample size and interval width; paraphrase framing bias; extraction yield; any D7 fallback used
-- [ ] Null and negative findings at the same prominence as positive ones
+- [x] Every metric per category and pooled, every CI, the criterion-3 count with its denominator, latency and throughput with warm-up count and concurrency, hardware stated
+- [x] D5 parameter table reproduced (as a pinned-parameter list), with a note that no value was tuned on the evaluation set
+- [x] Query authorship and review process stated plainly (D4): multi-hop from HotpotQA; exact-term/paraphrase AI-drafted and bulk-accepted by the author; 0 paraphrase overrides
+- [x] Limitations: sample size and interval width; paraphrase framing bias (BM25 = 0.0 by construction); extraction yield; one training run; no multiplicity correction; memory caveat on latency
+- [x] Null and negative findings at the same prominence as positive ones — the README **leads** with "the hybrid did not beat dense retrieval alone"
 **Verify:** every number traced to a file `reproduce.sh` regenerates.
 **Dependencies:** 38. **Scope:** M. **Files:** `README.md`
 
-### Task 40: Review and simplification pass
+**Notes:** result tables are copied verbatim from `reports/` by script, not
+retyped. Latency was re-measured after the rerank changes: p50 0.9905 s / p95
+1.1947 s, D1 pass — but that pass saw ~74k swap-out pages (the earlier pass, p50
+1.0339 / p95 1.2104, saw none); both are disclosed. README states that the full
+clean `reproduce.sh` run has **not** been executed end to end, so criterion 6 is
+"reviewed", not "proven", until it is.
+
+### Task 40: Review and simplification pass — PARTIAL
 **Acceptance:**
-- [ ] `code-review-and-quality` and `code-simplification` passes complete (workflow step 9)
-- [ ] Performance gate for criterion 5 re-checked after any change (workflow step 10)
+- [ ] `code-review-and-quality` and `code-simplification` passes complete (workflow step 9) — **formal skill passes not run**
+- [x] Performance gate for criterion 5 re-checked after changes (latency re-measured, D1 pass)
 **Verify:** `pytest -q && ruff check .`; `reproduce.sh` still reproduces.
 **Dependencies:** 39. **Scope:** M.
 
-### Checkpoint H — done
-- [ ] All six acceptance criteria answered, including any answered negatively
-- [ ] `reproduce.sh` regenerates every README number from a clean checkout
+**Done instead / in addition:** full suite **302 passed** (incl. slow, real
+services up, nothing skipped), `ruff check` clean, index integrity confirmed
+after the suite (1000 / 6862 / 1000). Two fresh-context **adversarial reviews**
+ran and were reconciled (bootstrap, 6 findings; fine-tuning path, 9 findings).
+Repo hygiene: `checkpoints/` added to `.gitignore`. Untracked items **not
+created by this work and left alone**: `.agents/`, `.claude/`,
+`skills-lock.json`, `data/skills/`.
+
+### Checkpoint H — done — NOT YET CLOSABLE
+- [x] All six acceptance criteria answered, including any answered negatively: 1 (tables), 2 (CIs; one row excludes zero, negative), 3 (**2/60, below the threshold of 5**), 4 (mixed; no pooled gain), 5 (D1 pass), 6 (see below)
+- [ ] `reproduce.sh` regenerates every README number from a clean checkout — **script reviewed and fixed, never run end to end**
 - [ ] **Final human review**

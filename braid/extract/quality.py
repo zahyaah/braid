@@ -37,6 +37,84 @@ from dataclasses import dataclass
 from braid.extract.entities import fold_case
 from braid.extract.models import Triple
 
+# How the hand-annotated sample was produced. This is a constant (not derived
+# from any file) so `python -m braid.extract quality` can reproduce the report's
+# methodology note verbatim.
+ANNOTATION_ORDER_NOTE = (
+    "Annotated **before** the pipeline's output for these sentences was "
+    "consulted: sentences were sampled (seed 20260923) and read cold, applying "
+    "the five documented patterns (README.md) by eye. The only pipeline-adjacent "
+    "information used was each passage's own title (needed to annotate "
+    "pronoun-subject sentences correctly, since entities.py substitutes "
+    "third-person pronouns with the title) -- that is corpus metadata, not "
+    "extraction output."
+)
+
+# Hand-written annotation methodology prose, reproduced verbatim so
+# `python -m braid.extract quality` can regenerate the full report (numbers +
+# methodology) rather than just the computed tables.
+METHODOLOGY_SECTION = """## Annotation methodology and its limitations
+
+Gold triples were written using the same five patterns the pipeline
+implements (active SVO, passive+agent, copular, prep-object, conjunction
+expansion), applied by manual reading rather than by predicting spaCy's exact
+parse tree. Subject/object text uses the core entity only (e.g. "Mike
+Nichols", not "director Mike Nichols"); `compare()` uses containment matching
+specifically so an annotator's minimal span still counts as correct against
+the pipeline's fuller syntactic span (see quality.py's docstring).
+
+**Annotation was conservative, not exhaustive**, for sentences with multiple
+plausible triples (conjoined attributes, multiple clauses): one representative
+triple was recorded rather than every one. Spot-checking the unmatched
+extracted triples after the real run confirmed this directly -- a substantial
+share of triples counted as "extra" (lowering precision) are additional
+correct facts the gold set simply never recorded, not extraction errors:
+`(four-piece band, consist of, Tim Commerford)`, `(students, obtain, master's
+degrees)`, `(Rudolph Wendelin, be, best-known artist behind Smokey Bear)` --
+all correct, all conjuncts or clauses this annotation pass chose not to
+duplicate. **The measured precision above is therefore a conservative lower
+bound**, not a point estimate to be taken at face value; the true precision on
+a fully exhaustive gold standard is very likely higher.
+
+**Two real bugs were found and fixed** during this process, before the
+numbers above were finalized (both with regression tests in
+`tests/extract/test_patterns.py`):
+
+1. **Relative pronoun subjects** ("which", "who", "that" as a relative
+   pronoun -- POS tag WDT/WP) were treated as ordinary subjects, since only
+   third-person personal pronouns are substituted (entities.py). This
+   produced nonsensical triples like `(which, air on, ABC)` from "the movie,
+   which aired on ABC...". Fixed by skipping WH-tagged subjects entirely
+   (no triple emitted, consistent with the module's existing
+   "err toward silence" rule for interrogative sentences) rather than
+   attempting antecedent resolution, which is out of scope for the documented
+   pronoun-substitution rule (title-only, not general coreference).
+2. **Relation casing**: a sentence-initial fronted preposition ("With her
+   approach, Kamen became...") left its surface capitalization in the
+   relation string (`"become With"` instead of `"become with"`).
+
+**Known, documented gaps** (not fixed, out of the documented pattern set's
+scope -- see README.md's "What is not extracted"):
+- Copula verbs other than literal "be" ("become", "remain", "seem") are not
+  covered by pattern 3.
+- Adjectival predicates (`acomp`: "is correct") are not covered by pattern 3,
+  which only matches noun-phrase predicates (`attr`).
+- Clausal complements (`ccomp`: "notes that X") are not covered by pattern 1,
+  which requires a nominal `dobj`.
+- **Conjoined verb phrases are not expanded.** "Allen was born in Los
+  Angeles and currently lives in Lancaster" only ever considers the verb a
+  subject's `head` directly governs; a second conjoined verb sharing the same
+  subject is not visited. Pattern 5 (conjunction expansion) only covers
+  conjoined *subjects and objects*, not conjoined *verbs* -- a real,
+  identified limitation, not yet fixed given scope/time.
+- **Parallel/positional conjunctions produce a cartesian product, not
+  paired triples.** "X, Y, Z were replaced by A, B, C respectively" would
+  expand to nine triples (every subject conjunct paired with every object
+  conjunct) instead of the three correctly-paired ones. Not fixed; flagged
+  here because it was observed directly in the sample (passage
+  `de3fe845a68ba037`) and not annotated in gold for that reason.
+"""
+
 
 @dataclass(frozen=True)
 class GoldTriple:
@@ -195,6 +273,8 @@ def render_markdown(report: QualityReport, *, sample_size: int, annotation_order
         "| Relation | Count |",
         "|---|---|",
     ]
-    for relation, count in sorted(report.relation_histogram.items(), key=lambda kv: -kv[1]):
+    for relation, count in sorted(
+        report.relation_histogram.items(), key=lambda kv: (-kv[1], kv[0])
+    ):
         lines.append(f"| {relation} | {count} |")
     return "\n".join(lines) + "\n"
