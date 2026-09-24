@@ -97,12 +97,16 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def cmd_all_configs(args: argparse.Namespace) -> int:
-    from braid.query.factory import create_retriever
+    from braid.query.factory import FINETUNED_MODEL_PATH, create_retriever
 
-    # The four configurations scoreable before the fine-tuned reranker exists
-    # (Task 37 adds `fused-rerank-ft`). All are evaluated over the identical
-    # query list, so criterion-2's paired bootstrap is well-defined.
-    configs = ("bm25", "dense", "fused", "fused-rerank")
+    # The four baseline configurations plus the fine-tuned reranker (Task 37).
+    # All are evaluated over the identical query list, so criterion-2's paired
+    # bootstrap is well-defined.
+    configs = ["bm25", "dense", "fused", "fused-rerank"]
+    ft_available = Path(FINETUNED_MODEL_PATH).exists()
+    if ft_available:
+        configs.append("fused-rerank-ft")
+
     queries = read_queries(args.dir / QUERIES_FILE)
     results = {}
     for name in configs:
@@ -111,6 +115,24 @@ def cmd_all_configs(args: argparse.Namespace) -> int:
 
     comparisons = criterion2_comparisons(results, resamples=args.bootstrap, seed=args.seed)
     report = render_markdown(results, comparisons)
+
+    # Before/after: fine-tuned vs pretrained cross-encoder (Task 37).
+    if ft_available:
+        from braid.finetune.compare import compare_before_after, render_before_after
+
+        before_after = compare_before_after(
+            results["fused-rerank"],
+            results["fused-rerank-ft"],
+            resamples=args.bootstrap,
+            seed=args.seed,
+        )
+        report += "\n" + render_before_after(before_after)
+    else:
+        report += (
+            "\n## Before/after: fine-tuned cross-encoder vs pretrained\n\n"
+            f"_Skipped: fine-tuned checkpoint `{FINETUNED_MODEL_PATH}` not found. "
+            "Run `python -m braid.finetune --out models/ce-braid` first._\n"
+        )
 
     out = args.out if args.out else DEFAULT_REPORT
     out.parent.mkdir(parents=True, exist_ok=True)

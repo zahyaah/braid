@@ -19,6 +19,11 @@ SUPPORTED_CONFIGS: tuple[str, ...] = (
     "fused-rerank-ft",
 )
 
+# The fine-tuned cross-encoder checkpoint produced by `python -m braid.finetune`
+# (Task 37). `fused-rerank-ft` reranks with this model instead of the pretrained
+# `ms-marco-MiniLM-L-6-v2` that `fused-rerank` uses.
+FINETUNED_MODEL_PATH = "models/ce-braid"
+
 _REGISTRY: dict[str, Callable[..., Retriever]] = {}
 
 
@@ -98,6 +103,8 @@ def create_retriever(name: str, **kwargs: Any) -> Retriever:
         try:
             from braid.query.rerank import RerankRetriever
 
+            if name == "fused-rerank-ft":
+                kwargs.setdefault("model_name", FINETUNED_MODEL_PATH)
             return RerankRetriever(name=name, **kwargs)
         except ImportError as err:
             raise NotImplementedError(
