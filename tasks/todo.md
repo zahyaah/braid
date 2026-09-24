@@ -80,12 +80,12 @@ relevance judgment before this task lands.
 **Verify:** `pytest tests/ingest/test_freeze.py -q`; `git show --stat <freeze commit>` touches only `data/manifest.json`
 **Dependencies:** 5. **Scope:** S. **Files:** `braid/ingest/freeze.py`, `tests/ingest/test_freeze.py`
 
-### Checkpoint A — corpus is trustworthy and frozen
-- [ ] Corpus size within 500-1,000; manifest states the exact number
-- [ ] Byte-identical rerun confirmed
-- [ ] Zero dangling supporting-passage IDs
-- [ ] `frozen: true`, `corpus_hash` recorded, freeze commit hash written into the checkpoint record
-- [ ] **Human review before proceeding**
+### Checkpoint A — corpus is trustworthy and frozen — DONE
+- [x] Corpus size within 500-1,000; manifest states the exact number — **1,000** (`passages_after_dedupe: 1000`, `target_passages: 1000`)
+- [x] Byte-identical rerun confirmed — `tests/ingest/test_incremental.py` asserts byte-identical re-ingest (Task 5)
+- [x] Zero dangling supporting-passage IDs — queryset validator (Task 7) exits 0 against the committed set
+- [x] `frozen: true`, `corpus_hash` recorded, freeze commit hash written into the checkpoint record — freeze commit `dbc0f09` (touches only `data/manifest.json`); `frozen_at 2026-09-23T00:52:52+00:00`, `corpus_hash 359f572b07eab0f3…`
+- [x] **Human review before proceeding** — via standing authorization on review-path decisions (2026-09-23)
 
 ---
 
@@ -175,17 +175,15 @@ with a flagged word, so no override was needed for any paraphrase query.
 ### Checkpoint B — labels exist, are reviewed, and are provably first
 - [x] Validator exits 0 on the committed set; 100% review coverage on both drafted categories
 - [x] Every query's recorded `corpus_hash` matches the frozen manifest
-- [ ] Git audit records **three** hashes in order: the corpus-freeze commit (Task 6), the commit adding `queries.jsonl` and `review.jsonl`, and the first commit touching `braid/index/` or `braid/query/` — **pending commit**, see below
-- [ ] The retrieval-code audit whitelists interface-only commits to `braid/query/` — the `Retriever` Protocol and `Hit` dataclass only, with no function body beyond `...`, checked mechanically (amendment 7, item 1) — **not yet applicable, no `braid/query/` commit exists**
+- [x] Git audit records **three** hashes in order: the corpus-freeze commit (Task 6), the commit adding `queries.jsonl` and `review.jsonl`, and the first commit touching `braid/index/` or `braid/query/` — **`dbc0f09` (freeze) → `a93f5e7` (queries.jsonl + review.jsonl) → `e675cc1` (first `braid/query/` touch, interface-only `base.py`)**
+- [x] The retrieval-code audit whitelists interface-only commits to `braid/query/` — the `Retriever` Protocol and `Hit` dataclass only, with no function body beyond `...`, checked mechanically (amendment 7, item 1) — **`braid/query/base.py` in `e675cc1` is interface-only (verified: Protocol + frozen dataclass, bodies `...`) and was the only `braid/query/` file until Phase 6's `a08bbd2`/`9f2fe98`**
 - [x] Override count and its effect on the paraphrase category noted for the README: 0 overrides, no limitation to note
 - [x] **Human review before proceeding — done via explicit author decision on review path (AskUserQuestion, 2026-09-23), not silently assumed.** No retrieval code is written before this gate passes.
 
-**Status:** data-complete, commit-pending. `queries.jsonl` and `review.jsonl`
-are staged but not yet committed. The freeze commit (Task 6) also has not
-been made per earlier correspondence — both need to land, in order, before
-this checkpoint is fully closed and Phase 3 (`eval`, which needs no retrieval
-code but should still come after this gate per the plan) or Phase 5/6
-(`index`/`query`) begin.
+**Status:** closed. The freeze commit (`dbc0f09`) and the `queries.jsonl` +
+`review.jsonl` commit (`a93f5e7`) both landed before the first retrieval-code
+commit, in the order the audit requires; the interface-only `base.py`
+whitelist commit is `e675cc1`. Phases 3-6 have all since landed on top.
 
 ---
 
