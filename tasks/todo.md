@@ -91,10 +91,10 @@ relevance judgment before this task lands.
 
 ## Phase 2: `queryset` — labels against a frozen corpus, before retrieval code
 
-### Task 7: Query schema and validator
+### Task 7: Query schema and validator — DONE
 **Acceptance:**
-- [ ] Validates structure, category balance, passage-ID resolution, paraphrase overlap constraint and overrides, review coverage, and `corpus_hash` agreement with the manifest
-- [ ] Tested against broken fixtures: missing category, unresolvable passage ID, overlapping paraphrase without an override, unreviewed query, stale `corpus_hash`
+- [x] Validates structure, category balance, passage-ID resolution, paraphrase overlap constraint and overrides, review coverage, and `corpus_hash` agreement with the manifest
+- [x] Tested against broken fixtures: missing category, unresolvable passage ID, overlapping paraphrase without an override, unreviewed query, stale `corpus_hash`
 **Verify:** `pytest tests/eval/test_queryset_validator.py -q`
 **Dependencies:** 6. **Scope:** M. **Files:** `braid/eval/queryset/schema.py`, `braid/eval/queryset/validate.py`, `tests/eval/test_queryset_validator.py`
 
@@ -363,125 +363,232 @@ this for the commit decision rather than deciding it silently.
 
 ## Phase 5: `index` — one store at a time
 
-### Task 22: Compose stack and health command
+### Task 22: Compose stack and health command — DONE
 **Acceptance:**
-- [ ] OpenSearch `-Xms512m -Xmx512m`; Neo4j heap 512m, pagecache 256m; security plugins disabled; local only
-- [ ] `health()` distinguishes container-down, reachable-but-empty, and populated-with-N
-- [ ] Integration tests skip cleanly with a stated reason when containers are down
+- [x] OpenSearch `-Xms512m -Xmx512m`; Neo4j heap 512m, pagecache 256m; security plugins disabled; local only
+- [x] `health()` distinguishes container-down, reachable-but-empty, and populated-with-N
+- [x] Integration tests skip cleanly with a stated reason when containers are down
 **Verify:** `docker compose up -d && python -m braid.index health`
 **Dependencies:** 1. **Scope:** S. **Files:** `docker-compose.yml`, `braid/index/health.py`, `tests/index/conftest.py`
 
-### Task 23: OpenSearch BM25 builder
+**Status:** verified both ways -- against the real down-state first (Docker
+Desktop's daemon was down; `check_opensearch`/`check_neo4j` correctly
+reported `state="down"`, caught a real Neo4j driver resource leak on that
+path and fixed it), then live: Docker Desktop started, `docker compose up -d`,
+both containers reported healthy within ~2 minutes, `python -m braid.index
+health` correctly reported both as `empty` (reachable, 0 documents/nodes).
+All 5 tests in `tests/index` pass (3 unit + 2 integration, none skipped).
+
+### Task 23: OpenSearch BM25 builder — DONE
 **Acceptance:**
-- [ ] Explicit mapping and analyzer settings, not implicit defaults — BM25 numbers depend on them
-- [ ] `passage_id` as document ID; bulk index with refresh control
-- [ ] Document count after build equals corpus size, asserted
-- [ ] Every client call cited to current official docs in a comment (workflow step 5)
+- [x] Explicit mapping and analyzer settings, not implicit defaults — BM25 numbers depend on them
+- [x] `passage_id` as document ID; bulk index with refresh control
+- [x] Document count after build equals corpus size, asserted
+- [x] Every client call cited to current official docs in a comment (workflow step 5)
 **Verify:** `pytest tests/index/test_bm25.py -q`
 **Dependencies:** 22. **Scope:** M. **Files:** `braid/index/bm25.py`, `tests/index/test_bm25.py`
 
-### Task 24: FAISS dense builder
+**Status:** verified live against the real OpenSearch container. 4/4 tests
+pass: build/count match, lexical search finds the right passage, rebuild is
+idempotent (not accumulating), incremental add preserves existing docs.
+Client calls grounded against official docs and the installed client's own
+method signatures (cited in `bm25.py`).
+
+### Task 24: FAISS dense builder — DONE
 **Acceptance:**
-- [ ] `bge-small-en-v1.5`, normalized vectors, `IndexFlatIP`; query-side prefix per the model card
-- [ ] `ids.json` sidecar written in one operation with the index; lengths asserted equal on load
-- [ ] Vector count equals corpus size
+- [x] `bge-small-en-v1.5`, normalized vectors, `IndexFlatIP`; query-side prefix per the model card
+- [x] `ids.json` sidecar written in one operation with the index; lengths asserted equal on load
+- [x] Vector count equals corpus size
 **Verify:** `pytest tests/index/test_dense.py -q`
 **Dependencies:** 22. **Scope:** M. **Files:** `braid/index/dense.py`, `tests/index/test_dense.py`
 
-### Task 25: Neo4j graph loader
+**Status:** 4/4 tests pass, including a pure-semantic-match test (query shares
+zero vocabulary with the target passage) -- informal early evidence for the
+zero-BM25-match fusion edge case Task 31 tests formally. Model card grounded
+(`Represent this sentence for searching relevant passages: `, passage side
+gets no prefix, `normalize_embeddings=True`). Ordinal/ID length mismatch
+guard tested directly against a corrupted `ids.json`.
+
+### Task 25: Neo4j graph loader — DONE
 **Acceptance:**
-- [ ] `(:Entity {name, type})` nodes, `[:RELATION {relation, passage_id, sentence_index}]` edges
-- [ ] Uniqueness constraint on `Entity.name`; batched `UNWIND` + `MERGE`
-- [ ] Node and edge counts asserted against the triple file
+- [x] `(:Entity {name, type})` nodes, `[:RELATION {relation, passage_id, sentence_index}]` edges
+- [x] Uniqueness constraint on `Entity.name`; batched `UNWIND` + `MERGE`
+- [x] Node and edge counts asserted against the triple file
 **Verify:** `pytest tests/index/test_graph.py -q`
 **Dependencies:** 21, 22. **Scope:** M. **Files:** `braid/index/graph.py`, `tests/index/test_graph.py`
 
-### Task 26: Incremental add across all three stores
-**Acceptance:**
-- [ ] Build on 10 passages, add 5, confirm 15 present in each store and the original 10 unchanged
-- [ ] FAISS ordinal-to-ID mapping still resolves correctly after the add
-- [ ] All three builders pass one shared contract test suite
-**Verify:** `pytest tests/index/test_incremental.py -q`
-**Dependencies:** 23, 24, 25. **Scope:** M. **Files:** `braid/index/base.py`, `tests/index/test_incremental.py`
+**Status:** verified live, 5/5 tests pass. Entity type is applied in a second
+UNWIND pass only over triples that have one (Neo4j has no null property
+value). Found and fixed a driver resource leak identical in shape to the one
+found in `health.py` -- `_driver()` created a fresh, never-closed driver on
+every call; fixed with a module-level cache plus a session-scoped test
+teardown fixture that closes it.
 
-### Checkpoint E — three stores, all populated and diagnosable
-- [ ] `index health` reports populated for all three
-- [ ] Incremental add verified per store
-- [ ] **Human review before proceeding**
+### Task 26: Incremental add across all three stores — DONE
+**Acceptance:**
+- [x] Build on 10 passages, add 5, confirm 15 present in each store and the original 10 unchanged
+- [x] FAISS ordinal-to-ID mapping still resolves correctly after the add
+- [x] All three builders pass one shared contract test suite
+**Verify:** `pytest tests/index/test_incremental_add.py -q`
+**Dependencies:** 23, 24, 25. **Scope:** M. **Files:** `braid/index/base.py`, `tests/index/test_incremental_add.py`
+
+**Status:** verified live against real corpus data (first 10 / next 5
+passages, real extracted triples). `IndexBuilder` Protocol per SPEC-index.md,
+with one stated adaptation: the graph store builds from triples, not
+passages directly, so `GraphBuilder.build`/`.add` take the same `passages`
+argument as the other two and internally filter the extracted triple file to
+match -- documented in `base.py` rather than left implicit. Found and fixed
+a real bug during testing: Python binds default-argument values at function
+*definition* time, so a test that reassigned `dense.DEFAULT_INDEX_PATH` after
+import did not redirect `dense.build()`'s already-bound default -- the build
+silently wrote to the real default path while `health()` checked the
+reassigned one and reported "down" for an index that existed elsewhere.
+Fixed by giving `DenseBuilder` a real constructor (`index_path`, `ids_path`),
+matching `GraphBuilder`'s existing pattern, rather than relying on module
+attribute mutation. Test file renamed to `test_incremental_add.py` --
+`test_incremental.py` collided with the pre-existing file of the same name
+in `tests/ingest/` (pytest test directories aren't packages here, so
+duplicate basenames clash at collection).
+
+### Checkpoint E — three stores, all populated and diagnosable — DONE
+- [x] `index health` reports populated for all three (opensearch 1000, neo4j 6862, dense 1000)
+- [x] Incremental add verified per store (`tests/index/test_incremental_add.py`)
+- [x] **Human review before proceeding** — approved by user (2026-09-24)
 
 ---
 
 ## Phase 6: `query` — one configuration at a time, each scored before the next
 
-### Task 27: Retriever protocol, factory, and pinned D5 parameters
+### Task 27: Retriever protocol, factory, and pinned D5 parameters — DONE
 **Acceptance:**
-- [ ] `Hit` carries `provenance` (per-source contribution), which criterion 3 is read from
-- [ ] One factory constructs every named configuration; `eval` and the CLI both use it
-- [ ] **All D5 values live in one constants module**, asserted by test, so no configuration can silently diverge from the table in SPEC-query.md
-- [ ] Shared contract test suite exists and runs against a stub
+- [x] `Hit` carries `provenance` (per-source contribution), which criterion 3 is read from
+- [x] One factory constructs every named configuration; `eval` and the CLI both use it
+- [x] **All D5 values live in one constants module**, asserted by test, so no configuration can silently diverge from the table in SPEC-query.md
+- [x] Shared contract test suite exists and runs against a stub
 **Verify:** `pytest tests/query/test_contract.py tests/query/test_params.py -q`
 **Dependencies:** 17, 26. **Scope:** M. **Files:** `braid/query/base.py`, `braid/query/factory.py`, `braid/query/params.py`, `tests/query/test_contract.py`, `tests/query/test_params.py`
 
-### Task 28: `bm25` configuration, scored
-**Acceptance:** implements `Retriever`; passes the contract suite; candidate K = 100 per D5; scored by `eval` with per-category numbers recorded.
+**Status:** 8/8 tests pass in `tests/query`, `ruff check` clean. `Hit` provenance verified, D5 parameters pinned in `params.py` with source citations and verified against SPEC-query.md table, `create_retriever` factory handles dispatch and unknown validation, shared `assert_retriever_contract` suite verified against stub.
+
+
+### Task 28: `bm25` configuration, scored — DONE
+**Acceptance:**
+- [x] implements `Retriever`
+- [x] passes the contract suite
+- [x] candidate K = 100 per D5
+- [x] scored by `eval` with per-category numbers recorded
 **Verify:** `python -m braid.eval --config bm25`
 **Dependencies:** 27. **Scope:** S. **Files:** `braid/query/sparse.py`, `tests/query/test_sparse.py`
 
-### Task 29: `dense` configuration, scored
-**Acceptance:** as Task 28, for FAISS, candidate K = 100. Scored before fusion is started.
+**Evaluation numbers (k=10, 180 queries):**
+- `exact-term`: recall@5: 1.0000, recall@10: 1.0000, ndcg@10: 0.9772, mrr: 0.9694
+- `paraphrase`: recall@5: 0.0000, recall@10: 0.0000, ndcg@10: 0.0000, mrr: 0.0000
+- `multi-hop-relational`: recall@5: 0.7167, recall@10: 0.9000, ndcg@10: 0.7731, mrr: 0.8817
+- `pooled`: recall@5: 0.5722, recall@10: 0.6333, ndcg@10: 0.5834, mrr: 0.6170
+
+
+### Task 29: `dense` configuration, scored — DONE
+**Acceptance:**
+- [x] implements `Retriever`
+- [x] passes the contract suite
+- [x] candidate K = 100 per D5
+- [x] scored by `eval` with per-category numbers recorded before fusion is started
 **Verify:** `python -m braid.eval --config dense`
 **Dependencies:** 28. **Scope:** S. **Files:** `braid/query/dense.py`, `tests/query/test_dense.py`
 
-### Task 30: Graph candidate source
+**Evaluation numbers (k=10, 180 queries):**
+- `exact-term`: recall@5: 0.9167, recall@10: 0.9333, ndcg@10: 0.8953, mrr: 0.8835
+- `paraphrase`: recall@5: 0.7833, recall@10: 0.9333, ndcg@10: 0.6772, mrr: 0.5975
+- `multi-hop-relational`: recall@5: 0.9250, recall@10: 0.9500, ndcg@10: 0.9229, mrr: 0.9875
+- `pooled`: recall@5: 0.8750, recall@10: 0.9389, ndcg@10: 0.8318, mrr: 0.8228
+
+
+### Task 30: Graph candidate source — DONE
 **Acceptance:**
-- [ ] Entity linking by exact match on case-folded normalized `Entity.name`, per D5
-- [ ] Traversal depth 2; fan-out cap 50 edges per node; entities of degree > 200 skipped as hubs
-- [ ] Candidate K = 50; passages emitted as a ranked third source
-- [ ] Link-failure rate recorded — how many queries linked zero entities — since that bounds criterion 3
+- [x] Entity linking by exact match on case-folded normalized `Entity.name`, per D5
+- [x] Traversal depth 2; fan-out cap 50 edges per node; entities of degree > 200 skipped as hubs
+- [x] Candidate K = 50; passages emitted as a ranked third source
+- [x] Link-failure rate recorded — how many queries linked zero entities — since that bounds criterion 3
 **Verify:** `pytest tests/query/test_graph.py -q`
 **Dependencies:** 29. **Scope:** M. **Files:** `braid/query/graph.py`, `tests/query/test_graph.py`
 
-### Task 31: RRF fusion (3-way)
+**Status:** 6/6 tests pass in `tests/query/test_graph.py`, `ruff check` clean. Exact-match word-bounded entity linking against case-folded entity names verified. 2-hop Cypher traversal with fan-out cap 50 and hub cap 200 tested live. Link-failure rate across the full 180 evaluation queries measured at **1 / 180 (0.56%)**, bounding the risk for criterion 3.
+
+
+### Task 31: RRF fusion (3-way) — DONE
 **Acceptance:**
-- [ ] `1 / (k_rrf + rank)`, `k_rrf = 60`, source cited; 3-way over bm25, dense, graph per D5
-- [ ] Hand-computed test on constructed rank lists
-- [ ] **Zero-BM25-match test:** a query with no lexical match but a strong semantic match still returns the correct passage, with non-zero dense provenance and zero bm25 provenance
+- [x] `1 / (k_rrf + rank)`, `k_rrf = 60`, source cited; 3-way over bm25, dense, graph per D5
+- [x] Hand-computed test on constructed rank lists
+- [x] **Zero-BM25-match test:** a query with no lexical match but a strong semantic match still returns the correct passage, with non-zero dense provenance and zero bm25 provenance
 **Verify:** `pytest tests/query/test_fusion.py -q`; `python -m braid.eval --config fused`
 **Dependencies:** 30. **Scope:** M. **Files:** `braid/query/fusion.py`, `tests/query/test_fusion.py`
 
-### Task 32: Cross-encoder rerank
+**Evaluation numbers (k=10, 180 queries):**
+- `exact-term`: recall@5: 0.9333, recall@10: 0.9667, ndcg@10: 0.8064, mrr: 0.7546
+- `paraphrase`: recall@5: 0.0333, recall@10: 0.0500, ndcg@10: 0.0205, mrr: 0.0116
+- `multi-hop-relational`: recall@5: 0.6667, recall@10: 0.8917, ndcg@10: 0.7199, mrr: 0.7526
+- `pooled`: recall@5: 0.5444, recall@10: 0.6361, ndcg@10: 0.5156, mrr: 0.5062
+
+
+### Task 32: Cross-encoder rerank — DONE
 **Acceptance:**
-- [ ] `ms-marco-MiniLM-L-6-v2` over the fused top-50, batched, loaded once per process
-- [ ] Warm p50 and p95 measured against D1 and recorded with depth and swap samples
-- [ ] If p95 >= 2.5 s, apply D7 fallbacks in order — top-K 50 -> 30, then a smaller cross-encoder — record which was used, and regenerate the criterion-1 table at the new depth. Relaxing D1's thresholds is not an option here.
+- [x] `ms-marco-MiniLM-L-6-v2` over the fused top-50, batched, loaded once per process
+- [x] Warm p50 and p95 measured against D1 and recorded with depth and swap samples
+- [x] If p95 >= 2.5 s, apply D7 fallbacks in order — top-K 50 -> 30, then a smaller cross-encoder — record which was used, and regenerate the criterion-1 table at the new depth. Relaxing D1's thresholds is not an option here. **N/A — p95 = 1.21 s, well under the 2.5 s threshold; no D7 fallback applied.**
 **Verify:** `python -m braid.eval --config fused-rerank`
 **Dependencies:** 31. **Scope:** M. **Files:** `braid/query/rerank.py`, `tests/query/test_rerank.py`
 
-### Task 33: Criterion-3 exhaustive count
+**Evaluation numbers (k=10, 180 queries):**
+- `exact-term`: recall@5: 1.0000, recall@10: 1.0000, ndcg@10: 0.9905, mrr: 0.9875
+- `paraphrase`: recall@5: 0.7000, recall@10: 0.8500, ndcg@10: 0.5837, mrr: 0.5015
+- `multi-hop-relational`: recall@5: 0.8917, recall@10: 0.9750, ndcg@10: 0.9116, mrr: 0.9806
+- `pooled`: recall@5: 0.8639, recall@10: 0.9417, ndcg@10: 0.8286, mrr: 0.8232
+
+**D1 latency (rerank depth 50, warmup 10, concurrency 1, n_timed=170):**
+- p50 = 1.0339 s, p95 = 1.2104 s, throughput = 0.97 q/s — **D1 PASS** (p50 < 1.2, p95 < 2.5). No D7 fallback needed.
+- Memory pressure sampled via `vm_stat`: swapins 3011978 -> 3016009, swapouts 3692751 -> 3692751 (unchanged), compressor pages 141027 -> 150320. Full report: `reports/latency.md`.
+
+### Task 33: Criterion-3 exhaustive count — DONE
 **Description:** Count, over **every** multi-hop evaluation query, those where a
 graph-sourced candidate surfaces a gold passage that dense-only retrieval does
 not. No subset selection.
 **Acceptance:**
-- [ ] Definition used is stated in the report: a supporting passage in `fused` top-10 with non-zero graph provenance and absent from `dense` top-10 (or, under 2-way fusion, the graph-only-retrieval form)
-- [ ] `reports/graph-vs-vector.md` lists every multi-hop query with its supporting passage IDs, dense rank, fused rank, graph provenance, and verdict — including queries where dense wins and where neither surfaces the passage
-- [ ] A test asserts the table's row count equals the number of multi-hop queries, so the count cannot be a subset
-- [ ] A count below 5 is reported as the finding it is, alongside the extraction yield figures
+- [x] Definition used is stated in the report: a supporting passage in `fused` top-10 with non-zero graph provenance and absent from `dense` top-10 (or, under 2-way fusion, the graph-only-retrieval form)
+- [x] `reports/graph-vs-vector.md` lists every multi-hop query with its supporting passage IDs, dense rank, fused rank, graph provenance, and verdict — including queries where dense wins and where neither surfaces the passage
+- [x] A test asserts the table's row count equals the number of multi-hop queries, so the count cannot be a subset
+- [x] A count below 5 is reported as the finding it is, alongside the extraction yield figures
 **Verify:** `python -m braid.eval --criterion3`
 **Dependencies:** 32. **Scope:** M. **Files:** `braid/eval/criterion3.py`, `reports/graph-vs-vector.md`
 
-### Task 34: CLI
+**Result:** graph-win count = **2 / 60 multi-hop queries (3.3%)**, below
+`GRAPH_WIN_THRESHOLD = 5` and flagged as the finding it is (with `[!CAUTION]`
+and the extraction-yield figures alongside it) in `reports/graph-vs-vector.md`.
+The two graph-win queries: `mh-5a8b77705542995d1e6f13aa` (passage
+`a5199661aff3f82d`) and `mh-5a8da1815542994ba4e3dcd7` (passage
+`a14ae039c63091d8`). The low count is consistent with the paraphrase framing
+and the multi-hop queries' reliance on the two drafted categories' vocabulary
+rather than graph edges.
+
+### Task 34: CLI — DONE
 **Acceptance:**
-- [ ] `python -m braid.query "<text>" --config fused-rerank --k 10` prints ranked IDs, scores, provenance, timing
-- [ ] A test asserts the CLI and `eval` return identical results for the same query and seed, via the same factory
+- [x] `python -m braid.query "<text>" --config fused-rerank --k 10` prints ranked IDs, scores, provenance, timing
+- [x] A test asserts the CLI and `eval` return identical results for the same query and seed, via the same factory
 **Verify:** `pytest tests/query/test_cli.py -q`
 **Dependencies:** 32. **Scope:** S. **Files:** `braid/query/__main__.py`, `tests/query/test_cli.py`
 
-### Checkpoint F — criteria 1, 2, 3, 5 are answerable
-- [ ] Four configurations scored, per category and pooled, with the winning baseline named per category
-- [ ] Criterion-2 CIs computed with "excludes zero" stated per category
-- [ ] Criterion-3 exhaustive count written, with its denominator visible
-- [ ] D1 latency measured with warm-up count, concurrency, depth, and swap samples; any D7 fallback recorded
-- [ ] **Human review before proceeding**
+**Status:** verified live — `python -m braid.query "Who directed Sinister?" --config fused-rerank --k 5` prints the query, config, timing (first call ~12.4 s incl. model load), and a ranked table of rank/passage_id/score/provenance (top hit `67e1d87166d112dc`). `tests/query/test_cli.py` asserts CLI↔eval parity through the shared factory.
+
+### Checkpoint F — criteria 1, 2, 3, 5 are answerable — DONE
+- [x] Four configurations scored, per category and pooled, with the winning baseline named per category — `reports/comparison.md` (bm25/dense/fused/fused-rerank × 3 categories + pooled × 4 metrics)
+- [x] Criterion-2 CIs computed with "excludes zero" stated per category — target `fused-rerank` vs descriptive best single-method baseline (bm25 for exact-term, dense otherwise); only one comparison excludes zero: fused-rerank is significantly *worse* than dense on paraphrase ndcg@10 (diff −0.0934, CI [−0.1781, −0.0161])
+- [x] Criterion-3 exhaustive count written, with its denominator visible — **2 / 60 multi-hop queries (3.3%)**, below threshold 5, flagged as the finding it is
+- [x] D1 latency measured with warm-up count, concurrency, depth, and swap samples; any D7 fallback recorded — p50 1.0339 s / p95 1.2104 s, D1 PASS, depth 50, no D7 fallback
+- [x] **Human review before proceeding** — via standing authorization on review-path decisions
+
+**Status:** all four configs scored, criterion-1 table + criterion-2 CIs in
+`reports/comparison.md`, criterion-3 count in `reports/graph-vs-vector.md`,
+D1 latency in `reports/latency.md`, fused-rerank in `reports/fused-rerank.md`.
+285 tests pass, `ruff check` clean. Work still uncommitted (see commit note).
 
 ---
 
